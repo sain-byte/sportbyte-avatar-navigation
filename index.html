@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101820">
+<title>Sport Byte — Avatar Navigation Lab</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#0c1218;--panel:#141e27;--panel2:#1b2934;--line:#2b3b47;--text:#edf4f7;--muted:#9aabb6;--accent:#a6f04b}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+.app{height:100%;display:grid;grid-template-rows:auto 1fr}
+header{z-index:8;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 15px;background:#101820;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}.logo{width:34px;height:34px;border-radius:10px;background:var(--accent);color:#101820;display:grid;place-items:center;font-weight:900}.brand strong{display:block;font-size:14px;letter-spacing:.3px}.brand small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.actions{display:flex;gap:7px;align-items:center}button,.file-label{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 12px;border-radius:9px;font:600 12px inherit;cursor:pointer;white-space:nowrap}button.primary,.file-label.primary{background:var(--accent);border-color:var(--accent);color:#101820}button:disabled{opacity:.4;cursor:not-allowed}input[type=file]{display:none}
+main{min-height:0;display:grid;grid-template-columns:315px 1fr}
+aside{background:var(--panel);border-right:1px solid var(--line);padding:14px;overflow:auto;z-index:4}
+.label{font-size:10px;color:var(--muted);font-weight:800;letter-spacing:1px;text-transform:uppercase;margin:5px 0 9px}
+.upload{border:1px dashed #526675;background:#17232d;border-radius:12px;padding:12px}.upload p{font-size:11px;color:var(--muted);line-height:1.45;margin:0 0 9px}
+.filename{font-size:11px;color:var(--accent);overflow-wrap:anywhere;margin-top:8px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0}.stat{background:var(--panel2);border:1px solid var(--line);padding:9px;border-radius:10px}.stat span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.7px}.stat strong{display:block;font-size:17px;margin-top:4px}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:7px}.controls button{padding:10px 7px}.wide{grid-column:1/-1}
+.control-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:11px 0;font-size:11px;color:var(--muted)}input[type=range]{width:120px;accent-color:var(--accent)}
+.progress{height:6px;background:#263640;border-radius:10px;overflow:hidden;margin:9px 0}.progress>i{display:block;height:100%;width:0;background:var(--accent)}
+.status{font-size:10px;color:var(--muted);line-height:1.45;min-height:28px;margin-top:9px}
+.note{border-top:1px solid var(--line);padding-top:11px;margin-top:12px}.note p{font-size:10px;color:var(--muted);line-height:1.5;margin:6px 0}
+.map-wrap{position:relative;min-width:0;min-height:0}#map{position:absolute;inset:0;background:#dbe4e8}
+#avatarCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none}
+.map-badge{position:absolute;top:11px;left:11px;z-index:5;background:rgba(12,18,24,.88);border:1px solid #52616a;border-radius:9px;padding:7px 9px;font-size:10px;color:#eaf2f5;backdrop-filter:blur(8px)}
+.map-actions{position:absolute;right:11px;top:11px;z-index:6;display:flex;flex-direction:column;gap:6px}.map-actions button{background:rgba(12,18,24,.9);padding:8px 10px}
+.bottom-card{position:absolute;z-index:5;left:50%;bottom:15px;transform:translateX(-50%);width:min(390px,calc(100% - 24px));background:rgba(13,21,28,.92);border:1px solid #40515c;border-radius:13px;padding:10px 13px;backdrop-filter:blur(10px);display:grid;grid-template-columns:1fr auto;gap:3px 10px;pointer-events:none}
+.bottom-card small{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}.bottom-card strong{font-size:19px}.bottom-card .remain{text-align:right}.bottom-card .remain strong{font-size:16px}.bottom-card .bar{grid-column:1/-1;height:4px;background:#2a3b45;border-radius:9px;overflow:hidden;margin-top:5px}.bottom-card .bar i{display:block;height:100%;width:0;background:var(--accent)}
+.empty{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;z-index:2}.empty-card{max-width:290px;text-align:center;padding:18px;border-radius:15px;background:rgba(12,18,24,.88);border:1px solid #354650;backdrop-filter:blur(8px)}.empty-card strong{font-size:14px}.empty-card p{font-size:11px;line-height:1.5;color:var(--muted)}
+@media(max-width:760px){
+ header{padding:8px 9px}.brand small{display:none}.actions button{padding:8px 9px;font-size:10px}
+ main{grid-template-columns:1fr;grid-template-rows:auto 1fr}aside{border-right:0;border-bottom:1px solid var(--line);padding:9px 11px;max-height:220px;overflow:auto}
+ .label{margin:0 0 7px}.upload{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px}.upload p{margin:0;flex:1}.upload .file-label{padding:8px}
+ .filename{margin-top:4px}.stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:8px 0}.stat{padding:6px}.stat span{font-size:8px}.stat strong{font-size:13px;margin-top:2px}
+ .controls{grid-template-columns:repeat(4,1fr);gap:5px}.controls button{padding:8px 3px;font-size:10px}.control-row{margin:7px 0}.note{display:none}.status{min-height:12px;margin-top:5px}
+ .map-wrap{min-height:0}.map-badge{top:8px;left:8px}.bottom-card{bottom:10px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+ <div class="brand"><div class="logo">SB</div><div><strong>SPORT BYTE <span style="color:var(--accent)">/ AVATAR NAV</span></strong><small>3D runner · GPX navigation prototype</small></div></div>
+ <div class="actions"><label class="file-label primary" for="gpxFile">＋ Import GPX</label><button id="fitBtn" disabled>Fit Route</button></div>
+</header>
+<main>
+<aside>
+ <div class="label">GPX route</div>
+ <div class="upload"><p>Import GPX untuk menampilkan rute asli dan menjalankan simulasi avatar.</p><label class="file-label" for="gpxFile">Pilih GPX</label></div>
+ <input id="gpxFile" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml">
+ <div class="filename" id="filename">Belum ada file GPX.</div>
+ <div class="stats">
+  <div class="stat"><span>Jarak rute</span><strong id="distance">—</strong></div>
+  <div class="stat"><span>Titik GPS</span><strong id="points">—</strong></div>
+  <div class="stat"><span>Elevasi</span><strong id="elevation">—</strong></div>
+  <div class="stat"><span>Durasi GPX</span><strong id="duration">—</strong></div>
+ </div>
+ <div class="label">Navigation controls</div>
+ <div class="controls">
+  <button id="playBtn" class="primary" disabled>▶ Simulate</button>
+  <button id="pauseBtn" disabled>Ⅱ Pause</button>
+  <button id="followBtn" disabled>◎ Follow ON</button>
+  <button id="rotateBtn" disabled>↻ Rotate ON</button>
+  <button id="liveBtn" class="wide" disabled>⌖ Use Live GPS</button>
+ </div>
+ <div class="control-row"><span>Simulation speed</span><input id="speed" type="range" min="1" max="20" value="5"><b id="speedVal">5×</b></div>
+ <div class="progress"><i id="sideProgress"></i></div>
+ <div class="status" id="status">Peta siap. Import GPX untuk mulai.</div>
+ <div class="note">
+  <div class="label">Prototype notes</div>
+  <p>GLB yang disertakan memiliki 54 joints dan belum memiliki animation clips. Avatar sudah dapat dirender dan mengikuti posisi/arah rute, tetapi belum memiliki gerakan kaki berlari.</p>
+  <p>Simulasi bergerak mengikuti titik GPX asli. Tidak ada simplification atau smoothing. Live GPS membutuhkan izin lokasi dan HTTPS/localhost.</p>
+  <p>Map data © OpenStreetMap contributors · Style & tiles by OpenFreeMap.</p>
+ </div>
+</aside>
+<section class="map-wrap">
+ <div id="map"></div>
+ <canvas id="avatarCanvas"></canvas>
+ <div class="map-badge" id="mapBadge">VECTOR MAP · 3D AVATAR</div>
+ <div class="map-actions"><button id="recenterBtn" disabled>◎ Recenter</button></div>
+ <div class="empty" id="emptyState"><div class="empty-card"><strong>Load GPX to place your avatar</strong><p>Avatar 3D akan ditempatkan pada rute. Jalankan simulasi untuk menguji follow camera dan rotasi peta.</p></div></div>
+ <div class="bottom-card"><div><small>Current route position</small><strong id="currentDistance">0.00 km</strong></div><div class="remain"><small>Remaining</small><strong id="remaining">—</strong></div><div class="bar"><i id="bottomProgress"></i></div></div>
+</section>
+</main>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import {GLTFLoader} from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+
+(() => {
+const $=id=>document.getElementById(id), status=m=>$('status').textContent=m;
+const map=new maplibregl.Map({container:'map',style:'https://tiles.openfreemap.org/styles/liberty',center:[110.8245,-7.5666],zoom:14,pitch:0,attributionControl:true});
+map.addControl(new maplibregl.NavigationControl({showCompass:true}),'bottom-right');
+map.addControl(new maplibregl.ScaleControl({maxWidth:110,unit:'metric'}),'bottom-left');
+
+const canvas=$('avatarCanvas');
+const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.setClearColor(0x000000,0);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+const scene=new THREE.Scene();
+const camera=new THREE.OrthographicCamera(0,window.innerWidth,0,window.innerHeight,-1000,1000);
+camera.position.z=500;
+scene.add(new THREE.HemisphereLight(0xffffff,0x697887,2.1));
+const key=new THREE.DirectionalLight(0xffffff,2.2);key.position.set(-100,200,300);scene.add(key);
+const fill=new THREE.DirectionalLight(0xffffff,1.0);fill.position.set(100,-100,200);scene.add(fill);
+const avatarRoot=new THREE.Group();scene.add(avatarRoot);
+let avatar=null, avatarHeight=150, avatarReady=false, avatarYawOffset=0;
+const loader=new GLTFLoader();
+loader.load('./ava-sain.glb',gltf=>{
+ avatar=gltf.scene;
+ const box=new THREE.Box3().setFromObject(avatar), size=box.getSize(new THREE.Vector3()), center=box.getCenter(new THREE.Vector3());
+ const h=Math.max(size.y,0.001), scale=150/h;
+ avatar.scale.setScalar(scale);
+ avatar.position.set(-center.x*scale,-box.min.y*scale,-center.z*scale);
+ avatar.traverse(o=>{if(o.isMesh){o.frustumCulled=false; if(o.material){o.material.side=THREE.DoubleSide;}}});
+ avatarRoot.add(avatar);avatarReady=true;
+ status('Avatar GLB berhasil dimuat · 54 joints · no animation clips.');
+ renderAvatar();
+},undefined,err=>{console.error(err);status('Gagal memuat ava-sain.glb. Pastikan file berada satu folder dengan index.html.');});
+
+function resize3D(){
+ const w=canvas.clientWidth||window.innerWidth,h=canvas.clientHeight||window.innerHeight;
+ renderer.setSize(w,h,false);camera.left=0;camera.right=w;camera.top=h;camera.bottom=0;camera.updateProjectionMatrix();renderAvatar();
+}
+function renderAvatar(){
+ if(!avatarReady)return;
+ const w=canvas.clientWidth||window.innerWidth,h=canvas.clientHeight||window.innerHeight;
+ renderer.render(scene,camera);
+}
+window.addEventListener('resize',resize3D);
+
+let segments=[],flat=[],routeBounds=null,totalDistance=0,progressDistance=0,playing=false,follow=true,rotate=true,liveWatch=null,lastFrame=0,raf=0;
+let kmMarkers=[],endMarkers=[];
+const hav=(a,b)=>{const R=6371000,r=x=>x*Math.PI/180,dl=r(b[1]-a[1]),dn=r(b[0]-a[0]);const q=Math.sin(dl/2)**2+Math.cos(r(a[1]))*Math.cos(r(b[1]))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(q));};
+const bearing=(a,b)=>{const r=x=>x*Math.PI/180,d=r(b[0]-a[0]),y=Math.sin(d)*Math.cos(r(b[1])),x=Math.cos(r(a[1]))*Math.sin(r(b[1]))-Math.sin(r(a[1]))*Math.cos(r(b[1]))*Math.cos(d);return (Math.atan2(y,x)*180/Math.PI+360)%360;};
+function parseGPX(s){
+ const doc=new DOMParser().parseFromString(s,'application/xml');if(doc.querySelector('parsererror'))throw Error('GPX/XML tidak valid.');
+ let out=[];for(const trk of [...doc.getElementsByTagNameNS('*','trk')])for(const seg of [...trk.getElementsByTagNameNS('*','trkseg')]){
+  const pts=[...seg.getElementsByTagNameNS('*','trkpt')].map(p=>({lon:+p.getAttribute('lon'),lat:+p.getAttribute('lat'),ele:p.getElementsByTagNameNS('*','ele')[0]?.textContent??null,time:p.getElementsByTagNameNS('*','time')[0]?.textContent??null})).filter(p=>Number.isFinite(p.lon)&&Number.isFinite(p.lat));
+  if(pts.length)out.push(pts);
+ }
+ if(!out.length){const pts=[...doc.getElementsByTagNameNS('*','rtept')].map(p=>({lon:+p.getAttribute('lon'),lat:+p.getAttribute('lat'),ele:p.getElementsByTagNameNS('*','ele')[0]?.textContent??null,time:p.getElementsByTagNameNS('*','time')[0]?.textContent??null})).filter(p=>Number.isFinite(p.lon)&&Number.isFinite(p.lat));if(pts.length)out=[pts];}
+ if(!out.length)throw Error('Tidak menemukan trkpt atau rtept.');
+ return out;
+}
+function clearMarkers(){[...kmMarkers,...endMarkers].forEach(m=>m.remove());kmMarkers=[];endMarkers=[];}
+function htmlMarker(pos,cls,label){const el=document.createElement('div');el.className=cls;if(label)el.textContent=label;return new maplibregl.Marker({element:el}).setLngLat(pos).addTo(map);}
+function addKmMarkers(){
+ let acc=0,next=1000;for(const seg of segments)for(let i=1;i<seg.length;i++){const a=seg[i-1],b=seg[i],d=hav([a.lon,a.lat],[b.lon,b.lat]);while(acc+d>=next){const f=d?(next-acc)/d:0;kmMarkers.push(htmlMarker([a.lon+(b.lon-a.lon)*f,a.lat+(b.lat-a.lat)*f],'km-marker',`${Math.round(next/1000)} km`));next+=1000;}acc+=d;}
+}
+function flatten(){
+ flat=[];totalDistance=0;
+ for(let si=0;si<segments.length;si++){const seg=segments[si];for(let i=0;i<seg.length;i++){if(i>0)totalDistance+=hav([seg[i-1].lon,seg[i-1].lat],[seg[i].lon,seg[i].lat]);flat.push({...seg[i],distance:totalDistance,segment:si});}}
+}
+function pointAt(d){
+ if(!flat.length)return null;d=Math.max(0,Math.min(totalDistance,d));
+ let lo=0,hi=flat.length-1;while(lo<hi){const mid=(lo+hi)>>1;if(flat[mid].distance<d)lo=mid+1;else hi=mid;}
+ const b=flat[lo],a=flat[Math.max(0,lo-1)];if(a.segment!==b.segment||b.distance===a.distance)return {point:b,heading:0};
+ const f=(d-a.distance)/(b.distance-a.distance);
+ return {point:{lon:a.lon+(b.lon-a.lon)*f,lat:a.lat+(b.lat-a.lat)*f},heading:bearing([a.lon,a.lat],[b.lon,b.lat])};
+}
+function setAvatarScreen(lnglat,heading){
+ if(!avatarReady||!lnglat)return;
+ let p;
+ if(follow){p={x:canvas.clientWidth*.5,y:canvas.clientHeight*.66};}
+ else {const q=map.project(lnglat);p={x:q.x,y:q.y};}
+ avatarRoot.position.set(p.x,(canvas.clientHeight||window.innerHeight)-p.y,0);
+ // GLB's forward axis may need adjustment for a specific rig; offset is isolated here.
+ const screenHeading=heading-map.getBearing();
+ avatarRoot.rotation.set(0,THREE.MathUtils.degToRad(-screenHeading)+avatarYawOffset,0);
+ renderAvatar();
+}
+function fitRoute(){if(routeBounds)map.fitBounds(routeBounds,{padding:65,maxZoom:17,duration:650});}
+function updateProgress(){
+ const pct=totalDistance?progressDistance/totalDistance*100:0;
+ $('sideProgress').style.width=pct+'%';$('bottomProgress').style.width=pct+'%';
+ $('currentDistance').textContent=(progressDistance/1000).toFixed(2)+' km';
+ $('remaining').textContent=(Math.max(0,totalDistance-progressDistance)/1000).toFixed(2)+' km';
+}
+function updatePosition(){
+ const v=pointAt(progressDistance);if(!v)return;
+ setAvatarScreen([v.point.lon,v.point.lat],v.heading);
+ if(follow){const opts={center:[v.point.lon,v.point.lat],duration:0};if(rotate)opts.bearing=v.heading;else opts.bearing=0;map.jumpTo(opts);}
+ updateProgress();
+}
+function frame(t){
+ raf=requestAnimationFrame(frame);if(!playing)return;
+ if(!lastFrame)lastFrame=t;const dt=Math.min((t-lastFrame)/1000,.15);lastFrame=t;
+ const speed=Number($('speed').value);
+ // Simulation speed is expressed as an approximate running pace multiplier.
+ progressDistance+=dt*(2.5*speed);
+ if(progressDistance>=totalDistance){progressDistance=totalDistance;playing=false;lastFrame=0;status('Simulasi selesai: avatar mencapai finish.');}
+ updatePosition();
+}
+function enableControls(on){['playBtn','pauseBtn','followBtn','rotateBtn','liveBtn','recenterBtn','fitBtn'].forEach(id=>$(id).disabled=!on);}
+$('gpxFile').addEventListener('change',async e=>{
+ const f=e.target.files?.[0];if(!f)return;
+ try{
+  status('Membaca GPX…');segments=parseGPX(await f.text());flatten();clearMarkers();
+  const features=segments.filter(s=>s.length>1).map(s=>({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:s.map(p=>[p.lon,p.lat])}}));
+  if(map.getSource('gpx-route'))map.getSource('gpx-route').setData({type:'FeatureCollection',features});
+  else{map.addSource('gpx-route',{type:'geojson',data:{type:'FeatureCollection',features}});map.addLayer({id:'route-casing',type:'line',source:'gpx-route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#14232c','line-width':8,'line-opacity':.9}});map.addLayer({id:'route-line',type:'line',source:'gpx-route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#a6f04b','line-width':5}});}
+  routeBounds=new maplibregl.LngLatBounds();flat.forEach(p=>routeBounds.extend([p.lon,p.lat]));
+  const first=flat[0],last=flat[flat.length-1];endMarkers.push(htmlMarker([first.lon,first.lat],'marker start'));endMarkers.push(htmlMarker([last.lon,last.lat],'marker finish'));addKmMarkers();
+  $('filename').textContent=f.name;$('distance').textContent=(totalDistance/1000).toFixed(2)+' km';$('points').textContent=flat.length.toLocaleString('id-ID');
+  const el=flat.map(p=>p.ele===null?NaN:Number(p.ele)).filter(Number.isFinite);$('elevation').textContent=el.length?`${Math.round(Math.min(...el))}–${Math.round(Math.max(...el))} m`:'N/A';
+  const ts=flat.map(p=>p.time?Date.parse(p.time):NaN).filter(Number.isFinite);$('duration').textContent=ts.length>1?Math.round((Math.max(...ts)-Math.min(...ts))/1000/60)+' min':'N/A';
+  progressDistance=0;playing=false;lastFrame=0;enableControls(true);$('emptyState').style.display='none';$('mapBadge').textContent=`${flat.length.toLocaleString('id-ID')} ORIGINAL GPS POINTS`;
+  fitRoute();updatePosition();status(`GPX dimuat: ${flat.length.toLocaleString('id-ID')} titik dipertahankan tanpa simplification.`);
+ }catch(err){console.error(err);status(err.message||'Gagal membaca GPX.');}
+});
+$('playBtn').onclick=()=>{if(!flat.length)return;if(progressDistance>=totalDistance)progressDistance=0;playing=true;lastFrame=0;status('Simulasi berjalan mengikuti urutan koordinat GPX.');};
+$('pauseBtn').onclick=()=>{playing=false;lastFrame=0;status('Simulasi dijeda.');};
+$('followBtn').onclick=()=>{follow=!follow;$('followBtn').textContent=follow?'◎ Follow ON':'◎ Follow OFF';updatePosition();};
+$('rotateBtn').onclick=()=>{rotate=!rotate;$('rotateBtn').textContent=rotate?'↻ Rotate ON':'↻ Rotate OFF';updatePosition();};
+$('recenterBtn').onclick=()=>{follow=true;$('followBtn').textContent='◎ Follow ON';updatePosition();};
+$('fitBtn').onclick=fitRoute;
+$('speed').oninput=()=> $('speedVal').textContent=$('speed').value+'×';
+$('liveBtn').onclick=()=>{
+ if(!navigator.geolocation){status('Browser tidak mendukung Geolocation.');return;}
+ if(liveWatch!==null){navigator.geolocation.clearWatch(liveWatch);liveWatch=null;$('liveBtn').textContent='⌖ Use Live GPS';status('Live GPS dihentikan.');return;}
+ if(!window.isSecureContext){status('Live GPS perlu HTTPS atau localhost.');return;}
+ $('liveBtn').textContent='■ Stop Live GPS';
+ liveWatch=navigator.geolocation.watchPosition(pos=>{
+  const lnglat=[pos.coords.longitude,pos.coords.latitude],heading=Number.isFinite(pos.coords.heading)?pos.coords.heading:map.getBearing();
+  follow=true;$('followBtn').textContent='◎ Follow ON';
+  if(rotate)map.jumpTo({center:lnglat,bearing:heading,zoom:Math.max(map.getZoom(),16)});else map.jumpTo({center:lnglat});
+  setAvatarScreen(lnglat,heading);
+  status(`Live GPS aktif · akurasi ±${Math.round(pos.coords.accuracy)} m.`);
+ },err=>status('GPS: '+err.message),{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+};
+map.on('load',()=>{resize3D();status('Peta vector siap. Memuat avatar 3D…');});
+map.on('move',()=>{if(!follow){const v=pointAt(progressDistance);if(v)setAvatarScreen([v.point.lon,v.point.lat],v.heading);}});
+function resize3D(){const w=canvas.clientWidth||innerWidth,h=canvas.clientHeight||innerHeight;renderer.setSize(w,h,false);camera.left=0;camera.right=w;camera.top=h;camera.bottom=0;camera.updateProjectionMatrix();if(flat.length)updatePosition();else renderAvatar();}
+requestAnimationFrame(frame);
+})();
+</script>
+<style>
+.marker{width:13px;height:13px;border-radius:50%;border:3px solid white;box-shadow:0 1px 6px #0009}.marker.start{background:#35d07f}.marker.finish{background:#ff626d}
+.km-marker{background:#111c25;border:2px solid #fff;color:#fff;border-radius:20px;padding:3px 6px;font-size:10px;font-weight:800;box-shadow:0 1px 5px #0008;white-space:nowrap}
+</style>
+</body></html>
