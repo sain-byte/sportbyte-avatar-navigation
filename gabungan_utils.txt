@@ -1,0 +1,2394 @@
+==================== src/utils/studio3dExporter.ts ====================
+import type {
+  ExportConfig,
+  RunnerConfig,
+  Studio3DTrack,
+  Studio3DTrackPoint,
+} from '../types/studio3d';
+import { formatDuration, formatPace } from './runParser';
+import type { Studio3DAudioEngine } from './studio3dAudio';
+import { sampleTrackPointByDistance } from './studio3dGpsEngine';
+
+export interface Studio3DFrameTelemetry {
+  point: Studio3DTrackPoint;
+  elapsedSec: number;
+  distanceKm: number;
+  elevGainSoFarM: number;
+  isFinishPhase: boolean;
+}
+
+export function getExportDurationSec(config: ExportConfig): number {
+  if (config.durationPreset === 'custom') {
+    return Math.min(180, Math.max(5, Math.round(config.customDurationSec || 25)));
+  }
+  return config.durationPreset;
+}
+
+/**
+ * Samples interpolated telemetry along the 3D route for any normalized timeline progress (0..1).
+ */
+export function sampleTrackTelemetryAtProgress(
+  track: Studio3DTrack,
+  rawProgress: number,
+  includeFinishPose: boolean,
+): Studio3DFrameTelemetry {
+  const finishThreshold = includeFinishPose ? 0.88 : 1.0;
+  const isFinishPhase = includeFinishPose && rawProgress >= finishThreshold;
+  const routeProgress = Math.min(1, Math.max(0, rawProgress / finishThreshold));
+
+  const pts = track.points;
+  if (pts.length === 0) {
+    throw new Error('Track has no points.');
+  }
+  if (pts.length === 1 || routeProgress <= 0) {
+    return {
+      point: pts[0],
+      elapsedSec: 0,
+      distanceKm: 0,
+      elevGainSoFarM: 0,
+      isFinishPhase: false,
+    };
+  }
+  if (routeProgress >= 1) {
+    return {
+      point: pts[pts.length - 1],
+      elapsedSec: track.totalDurationSec,
+      distanceKm: track.totalDistanceKm,
+      elevGainSoFarM: track.elevationGainM,
+      isFinishPhase,
+    };
+  }
+
+  const point = sampleTrackPointByDistance(pts, track.totalDistanceKm, routeProgress);
+
+  return {
+    point,
+    elapsedSec: point.elapsedSec,
+    distanceKm: point.distanceKm,
+    elevGainSoFarM: Math.round(track.elevationGainM * routeProgress),
+    isFinishPhase,
+  };
+}
+
+export interface StartFinishBannerState {
+  startAlpha: number; // 0..1
+  startOffsetY: number; // px offset at 720p scale
+  finishAlpha: number; // 0..1
+  finishOffsetY: number; // px offset at 720p scale
+}
+
+/**
+ * Computes synchronized Start (0..14%) and Finish (finishThreshold..100%) animated banner states
+ * shared identically by the 9:16 React phone preview and the 2D video export compositor.
+ */
+export function computeStartFinishBannerState(
+  rawProgress: number,
+  includeFinishPose: boolean,
+): StartFinishBannerState {
+  const p = Math.min(1, Math.max(0, rawProgress));
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+
+  // Start banner: active from 0..0.14 (visible at t=0, slides/fades out smoothly 0.10..0.14)
+  let startAlpha = 0;
+  let startOffsetY = -14;
+  if (p <= 0.14) {
+    if (p < 0.02) {
+      startAlpha = 0.72 + 0.28 * easeOutCubic(p / 0.02);
+    } else if (p <= 0.105) {
+      startAlpha = 1;
+    } else {
+      startAlpha = Math.max(0, 1 - (p - 0.105) / 0.035);
+    }
+    startOffsetY = (1 - startAlpha) * -14;
+  }
+
+  // Finish banner: enters cleanly on finish threshold
+  const finishThreshold = includeFinishPose ? 0.88 : 0.94;
+  let finishAlpha = 0;
+  let finishOffsetY = 16;
+  if (p >= finishThreshold) {
+    const enterT = (p - finishThreshold) / 0.035;
+    finishAlpha = p === finishThreshold ? 0.78 : easeOutCubic(enterT);
+    finishOffsetY = (1 - finishAlpha) * 16;
+  }
+
+  return {
+    startAlpha,
+    startOffsetY,
+    finishAlpha,
+    finishOffsetY,
+  };
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rad = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+export interface MiniMapPoint {
+  x: number;
+  y: number;
+}
+
+export interface MiniMapGeometry {
+  polyline: MiniMapPoint[];
+  startPt: MiniMapPoint;
+  endPt: MiniMapPoint;
+  runnerPt: MiniMapPoint;
+}
+
+/**
+ * Projects a GPS track into normalized 2D coordinates inside a square mini-map box,
+ * preserving geographic aspect ratio and returning the live runner marker along routeProgress (0..1).
+ */
+export function computeMiniMapGeometry(
+  track: Studio3DTrack,
+  routeProgress: number,
+  boxSize: number,
+  pad: number,
+): MiniMapGeometry {
+  const pts = track.points;
+  const fallbackPt = { x: boxSize / 2, y: boxSize / 2 };
+  if (pts.length === 0) {
+    return { polyline: [fallbackPt], startPt: fallbackPt, endPt: fallbackPt, runnerPt: fallbackPt };
+  }
+
+  const latSpanRaw = Math.max(1e-5, track.maxLat - track.minLat);
+  const cosLat = Math.max(0.25, Math.cos((track.centerLat * Math.PI) / 180));
+  const lonSpanRaw = Math.max(1e-5, (track.maxLon - track.minLon) * cosLat);
+  const maxSpan = Math.max(latSpanRaw, lonSpanRaw);
+  const inner = Math.max(4, boxSize - pad * 2);
+
+  const offsetX = pad + ((maxSpan - lonSpanRaw) / maxSpan) * inner * 0.5;
+  const offsetY = pad + ((maxSpan - latSpanRaw) / maxSpan) * inner * 0.5;
+
+  const project = (lat: number, lon: number): MiniMapPoint => {
+    const nx = ((lon - track.minLon) * cosLat) / maxSpan;
+    const ny = (track.maxLat - lat) / maxSpan;
+    return {
+      x: offsetX + nx * inner,
+      y: offsetY + ny * inner,
+    };
+  };
+
+  // Downsample long tracks cleanly to <= 120 vertices for crisp SVG/Canvas rendering
+  const step = Math.max(1, Math.floor(pts.length / 120));
+  const polyline: MiniMapPoint[] = [];
+  for (let i = 0; i < pts.length; i += step) {
+    polyline.push(project(pts[i].lat, pts[i].lon));
+  }
+  const last = pts[pts.length - 1];
+  const lastProj = project(last.lat, last.lon);
+  const tail = polyline[polyline.length - 1];
+  if (!tail || Math.abs(tail.x - lastProj.x) > 0.1 || Math.abs(tail.y - lastProj.y) > 0.1) {
+    polyline.push(lastProj);
+  }
+
+  const clampedP = Math.min(1, Math.max(0, routeProgress));
+  const distPt = sampleTrackPointByDistance(pts, track.totalDistanceKm, clampedP);
+
+  return {
+    polyline,
+    startPt: polyline[0],
+    endPt: lastProj,
+    runnerPt: project(distPt.lat, distPt.lon),
+  };
+}
+
+/**
+ * Draws the broadcast 9:16 HUD overlay onto the offscreen video compositor canvas.
+ */
+function paintBroadcastHudOverlay(params: {
+  ctx: CanvasRenderingContext2D;
+  width: number;
+  height: number;
+  track: Studio3DTrack;
+  runner: RunnerConfig;
+  telemetry: Studio3DFrameTelemetry;
+  progress: number;
+  includeFinishPose: boolean;
+}) {
+  const { ctx, width, height, track, runner, telemetry, progress, includeFinishPose } = params;
+  const s = width / 720;
+  const finishThreshold = includeFinishPose ? 0.88 : 1.0;
+  const routeProgress = Math.min(1, Math.max(0, progress / finishThreshold));
+
+  // Top & bottom contrast scrims for crisp WCAG AA legibility
+  const topGrad = ctx.createLinearGradient(0, 0, 0, 220 * s);
+  topGrad.addColorStop(0, 'rgba(2, 6, 23, 0.84)');
+  topGrad.addColorStop(0.65, 'rgba(2, 6, 23, 0.42)');
+  topGrad.addColorStop(1, 'rgba(2, 6, 23, 0)');
+  ctx.fillStyle = topGrad;
+  ctx.fillRect(0, 0, width, 220 * s);
+
+  const botGrad = ctx.createLinearGradient(0, height - 350 * s, 0, height);
+  botGrad.addColorStop(0, 'rgba(2, 6, 23, 0)');
+  botGrad.addColorStop(0.35, 'rgba(2, 6, 23, 0.56)');
+  botGrad.addColorStop(1, 'rgba(2, 6, 23, 0.90)');
+  ctx.fillStyle = botGrad;
+  ctx.fillRect(0, height - 350 * s, width, 350 * s);
+
+  const padX = 36 * s;
+
+  // Top-left header card (leaves room for top-right GPS mini-map inset)
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(16, 185, 129, 0.95)';
+  ctx.font = `700 ${Math.round(13 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText(`SPORTBYTE · #${(runner.bibNumber || '001').slice(0, 8)}`, padX, 46 * s);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = `700 ${Math.round(26 * s)}px Outfit, sans-serif`;
+  ctx.fillText(track.title.slice(0, 24), padX, 78 * s);
+
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.86)';
+  ctx.font = `600 ${Math.round(15 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText(
+    `${track.date} · ${track.location.slice(0, 22)}`,
+    padX,
+    104 * s,
+  );
+
+  // Top-right GPS mini-map radar inset
+  const mmSize = 114 * s;
+  const mmX = width - padX - mmSize;
+  const mmY = 30 * s;
+  drawRoundedRect(ctx, mmX, mmY, mmSize, mmSize, 16 * s);
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+  ctx.lineWidth = Math.max(1, 1.5 * s);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.92)';
+  ctx.font = `700 ${Math.round(11 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText('GPS', mmX + 10 * s, mmY + 18 * s);
+
+  const mmGeom = computeMiniMapGeometry(track, routeProgress, mmSize, 18 * s);
+  if (mmGeom.polyline.length >= 2) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(mmX + mmGeom.polyline[0].x, mmY + mmGeom.polyline[0].y);
+    for (let i = 1; i < mmGeom.polyline.length; i += 1) {
+      ctx.lineTo(mmX + mmGeom.polyline[i].x, mmY + mmGeom.polyline[i].y);
+    }
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = Math.max(2, 3.2 * s);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Start marker
+    ctx.beginPath();
+    ctx.arc(mmX + mmGeom.startPt.x, mmY + mmGeom.startPt.y, 4 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#10B981';
+    ctx.fill();
+
+    // Active runner GPS marker
+    ctx.beginPath();
+    ctx.arc(mmX + mmGeom.runnerPt.x, mmY + mmGeom.runnerPt.y, 5.5 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.strokeStyle = '#0284C7';
+    ctx.lineWidth = Math.max(1.5, 2.2 * s);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Animated Start & Finish Popup Overlay Banners (positioned clear below header & GPS inset)
+  const banner = computeStartFinishBannerState(progress, includeFinishPose);
+
+  if (banner.startAlpha > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = banner.startAlpha;
+    const bx = padX;
+    const bw = width - padX * 2;
+    const bh = 88 * s;
+    const by = (162 + banner.startOffsetY) * s;
+
+    drawRoundedRect(ctx, bx, by, bw, bh, 18 * s);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
+    ctx.lineWidth = Math.max(1.5, 2 * s);
+    ctx.stroke();
+
+    // START badge
+    drawRoundedRect(ctx, bx + 18 * s, by + 20 * s, 96 * s, 48 * s, 12 * s);
+    ctx.fillStyle = '#10B981';
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `800 ${Math.round(19 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText('START', bx + (18 + 48) * s, by + 51 * s);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `700 ${Math.round(21 * s)}px Outfit, sans-serif`;
+    ctx.fillText(
+      `${track.totalDistanceKm.toFixed(2)} KM · ${track.location.slice(0, 22)}`,
+      bx + 132 * s,
+      by + 42 * s,
+    );
+    ctx.fillStyle = '#A7F3D0';
+    ctx.font = `600 ${Math.round(14 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText(
+      `#${runner.bibNumber || '001'} ${(runner.runnerName || 'Pelari').slice(0, 22)}`,
+      bx + 132 * s,
+      by + 66 * s,
+    );
+    ctx.restore();
+  }
+
+  if (banner.finishAlpha > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = banner.finishAlpha;
+    const bx = padX;
+    const bw = width - padX * 2;
+    const bh = 104 * s;
+    const by = (162 + banner.finishOffsetY) * s;
+
+    drawRoundedRect(ctx, bx, by, bw, bh, 20 * s);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(249, 115, 22, 0.78)';
+    ctx.lineWidth = Math.max(1.5, 2 * s);
+    ctx.stroke();
+
+    // FINISH badge
+    drawRoundedRect(ctx, bx + 18 * s, by + 26 * s, 108 * s, 52 * s, 12 * s);
+    ctx.fillStyle = '#F97316';
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `800 ${Math.round(20 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText('FINISH', bx + (18 + 54) * s, by + 59 * s);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `700 ${Math.round(21 * s)}px Outfit, sans-serif`;
+    ctx.fillText(
+      `${(runner.runnerName || 'Pelari').slice(0, 22)} · #${runner.bibNumber || '001'}`,
+      bx + 142 * s,
+      by + 44 * s,
+    );
+    ctx.fillStyle = '#FDE68A';
+    ctx.font = `700 ${Math.round(16 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText(
+      `${track.totalDistanceKm.toFixed(2)} km · ${formatDuration(track.totalDurationSec)} · ${formatPace(track.avgPaceSecPerKm)}/km`,
+      bx + 142 * s,
+      by + 74 * s,
+    );
+    ctx.restore();
+  }
+
+  // Bottom HUD Card (clean surface without backdrop blur, matching screenshot)
+  const cardX = padX;
+  const cardW = width - padX * 2;
+  const cardH = 248 * s;
+  const cardY = height - cardH - 32 * s;
+
+  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 22 * s);
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+  ctx.lineWidth = Math.max(1, 1.5 * s);
+  ctx.stroke();
+
+  // Headline live distance / total KM + elapsed time or FINISH!
+  const distStr = telemetry.distanceKm.toFixed(2);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = `800 ${Math.round(34 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText(distStr, cardX + 24 * s, cardY + 46 * s);
+  const distW = ctx.measureText(distStr).width;
+
+  ctx.fillStyle = '#34D399';
+  ctx.font = `700 ${Math.round(16 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText(` / ${track.totalDistanceKm.toFixed(2)} KM`, cardX + 24 * s + distW, cardY + 45 * s);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = telemetry.isFinishPhase ? '#34D399' : '#E2E8F0';
+  ctx.font = `700 ${Math.round(18 * s)}px JetBrains Mono, monospace`;
+  ctx.fillText(
+    telemetry.isFinishPhase ? `FINISH · ${formatDuration(telemetry.elapsedSec)}` : formatDuration(telemetry.elapsedSec),
+    cardX + cardW - 24 * s,
+    cardY + 45 * s,
+  );
+  ctx.textAlign = 'left';
+
+  // Progress bar directly under headline distance
+  const barX = cardX + 24 * s;
+  const barW = cardW - 48 * s;
+  const barY = cardY + 62 * s;
+  drawRoundedRect(ctx, barX, barY, barW, 8 * s, 4 * s);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.fill();
+
+  drawRoundedRect(ctx, barX, barY, Math.max(14 * s, barW * progress), 8 * s, 4 * s);
+  ctx.fillStyle = runner.jerseyColor;
+  ctx.fill();
+
+  // 6 Live Metrics in clean 3x2 tabular grid
+  const stats = [
+    { label: 'PACE (/KM)', value: `${formatPace(telemetry.point.paceSecPerKm)} /km` },
+    { label: 'HEART RATE', value: `${telemetry.point.hr} bpm` },
+    { label: 'CADENCE', value: `${telemetry.point.cadence} spm` },
+    { label: 'DISTANCE', value: `${telemetry.distanceKm.toFixed(2)} km` },
+    { label: 'ELEV GAIN', value: `+${telemetry.elevGainSoFarM} m` },
+    { label: 'TIME', value: formatDuration(telemetry.elapsedSec) },
+  ];
+
+  const colW = (cardW - 48 * s) / 3;
+  stats.forEach((st, idx) => {
+    const col = idx % 3;
+    const row = Math.floor(idx / 3);
+    const sx = cardX + 24 * s + col * colW;
+    const sy = cardY + (102 + row * 68) * s;
+
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.92)';
+    ctx.font = `600 ${Math.round(13 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText(st.label, sx, sy);
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `700 ${Math.round(24 * s)}px JetBrains Mono, monospace`;
+    ctx.fillText(st.value, sx, sy + 27 * s);
+  });
+}
+
+export function pickSupportedVideoMimeType(): {
+  mimeType: string;
+  extension: 'mp4' | 'webm';
+} {
+  if (typeof MediaRecorder === 'undefined') {
+    return { mimeType: 'video/webm', extension: 'webm' };
+  }
+  const candidates: Array<{ mimeType: string; extension: 'mp4' | 'webm' }> = [
+    { mimeType: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', extension: 'mp4' },
+    { mimeType: 'video/mp4', extension: 'mp4' },
+    { mimeType: 'video/webm;codecs=vp9,opus', extension: 'webm' },
+    { mimeType: 'video/webm;codecs=vp8,opus', extension: 'webm' },
+    { mimeType: 'video/webm', extension: 'webm' },
+  ];
+  for (const cand of candidates) {
+    if (MediaRecorder.isTypeSupported(cand.mimeType)) {
+      return cand;
+    }
+  }
+  return { mimeType: '', extension: 'webm' };
+}
+
+export interface ExportVideoCallbacks {
+  getSourceCanvas: () => HTMLCanvasElement | null;
+  setProgress: (nextProgress: number) => void;
+  audioEngine: Studio3DAudioEngine;
+  track: Studio3DTrack;
+  runner: RunnerConfig;
+  exportConfig: ExportConfig;
+  onPercent: (pct: number) => void;
+  abortSignal: AbortSignal;
+}
+
+/**
+ * Records a clean vertical 9:16 video (720x1280 or 1080x1920 at 30fps) combining
+ * the live WebGL scene, broadcast HUD overlay, "Sportbyte" watermark, and Web Audio soundtrack.
+ */
+export async function recordStudio3DVideo({
+  getSourceCanvas,
+  setProgress,
+  audioEngine,
+  track,
+  runner,
+  exportConfig,
+  onPercent,
+  abortSignal,
+}: ExportVideoCallbacks): Promise<{ blob: Blob; filename: string; extension: 'mp4' | 'webm' }> {
+  const srcCanvas = getSourceCanvas();
+  if (!srcCanvas) {
+    throw new Error('Kanvas WebGL 3D belum siap.');
+  }
+  if (typeof MediaRecorder === 'undefined') {
+    throw new Error('Browser ini belum mendukung perekaman video MediaRecorder.');
+  }
+
+  const width = exportConfig.quality === '1080p' ? 1080 : 720;
+  const height = exportConfig.quality === '1080p' ? 1920 : 1280;
+  const durationSec = getExportDurationSec(exportConfig);
+  const fps = 30;
+
+  const compCanvas = document.createElement('canvas');
+  compCanvas.width = width;
+  compCanvas.height = height;
+  const ctx = compCanvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Gagal menginisialisasi kanvas kompositor 2D.');
+  }
+
+  // Configure and start Web Audio soundtrack synced with recording start
+  await audioEngine.configure(
+    exportConfig.musicPreset,
+    exportConfig.customAudioUrl,
+    exportConfig.volume,
+  );
+  if (exportConfig.musicPreset !== 'none') {
+    await audioEngine.start();
+  }
+
+  const canvasStream = compCanvas.captureStream(fps);
+  const combinedStream = new MediaStream();
+  canvasStream.getVideoTracks().forEach((t) => combinedStream.addTrack(t));
+
+  if (exportConfig.musicPreset !== 'none') {
+    const audioStream = audioEngine.getRecordingAudioStream();
+    audioStream?.getAudioTracks().forEach((t) => combinedStream.addTrack(t));
+  }
+
+  const { mimeType, extension } = pickSupportedVideoMimeType();
+  const recorder = new MediaRecorder(combinedStream, {
+    ...(mimeType ? { mimeType } : {}),
+    videoBitsPerSecond: exportConfig.quality === '1080p' ? 7_500_000 : 4_200_000,
+  });
+
+  const chunks: BlobPart[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+
+  const stopPromise = new Promise<Blob>((resolve, reject) => {
+    recorder.onstop = () => {
+      resolve(new Blob(chunks, { type: mimeType || 'video/webm' }));
+    };
+    recorder.onerror = () => {
+      reject(new Error('Terjadi kesalahan saat merekam video 9:16.'));
+    };
+  });
+
+  setProgress(0);
+  recorder.start(250);
+
+  const startMs = performance.now();
+  const totalMs = durationSec * 1000;
+
+  await new Promise<void>((resolve, reject) => {
+    let rafId = 0;
+    const step = () => {
+      if (abortSignal.aborted) {
+        cancelAnimationFrame(rafId);
+        reject(new Error('Ekspor video dibatalkan.'));
+        return;
+      }
+
+      const elapsedMs = performance.now() - startMs;
+      const p = Math.min(1, elapsedMs / totalMs);
+      setProgress(p);
+      onPercent(Math.round(p * 100));
+
+      const liveCanvas = getSourceCanvas();
+      if (liveCanvas) {
+        // Cover-fit WebGL source canvas into exact 9:16 export frame
+        const scale = Math.max(width / liveCanvas.width, height / liveCanvas.height);
+        const dw = liveCanvas.width * scale;
+        const dh = liveCanvas.height * scale;
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(liveCanvas, (width - dw) / 2, (height - dh) / 2, dw, dh);
+      }
+
+      const telemetry = sampleTrackTelemetryAtProgress(
+        track,
+        p,
+        exportConfig.includeFinishPose,
+      );
+      paintBroadcastHudOverlay({
+        ctx,
+        width,
+        height,
+        track,
+        runner,
+        telemetry,
+        progress: p,
+        includeFinishPose: exportConfig.includeFinishPose,
+      });
+
+      if (p >= 1) {
+        resolve();
+      } else {
+        rafId = requestAnimationFrame(step);
+      }
+    };
+    rafId = requestAnimationFrame(step);
+  }).catch((err) => {
+    if (recorder.state !== 'inactive') recorder.stop();
+    audioEngine.stop();
+    throw err;
+  });
+
+  if (recorder.state !== 'inactive') {
+    recorder.stop();
+  }
+  audioEngine.stop();
+  const blob = await stopPromise;
+
+  const safeSlug = track.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+
+  return {
+    blob,
+    filename: `sportbyte-3d-${track.date}-${safeSlug || 'run'}-${exportConfig.quality}.${extension}`,
+    extension,
+  };
+}
+
+
+==================== src/utils/studio3dGpsEngine.ts ====================
+import * as THREE from 'three';
+import type { Studio3DTrackPoint } from '../types/studio3d';
+import { haversineDistanceKm } from './gpxParser';
+
+export interface CleanGeoSample {
+  lat: number;
+  lon: number;
+  elevationM?: number;
+  timeMs: number;
+  hr?: number;
+  cadence?: number;
+  distanceKm?: number;
+  paceSecPerKm?: number;
+}
+
+export interface GroundedRouteVertex {
+  x: number;
+  y: number;
+  z: number;
+  distM: number;
+  yawRad: number;
+}
+
+export interface GroundedRoutePath {
+  vertices: GroundedRouteVertex[];
+  totalArcMeters: number;
+}
+
+function toRad(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+export function isValidGeoCoord(lat: number, lon: number): boolean {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -85 &&
+    lat <= 85 &&
+    lon >= -180 &&
+    lon <= 180 &&
+    !(Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6)
+  );
+}
+
+/**
+ * Validates lat/lon coordinates, removes duplicate points (<0.35m), rejects GPS
+ * outlier teleport spikes, and preserves strict monotonic time ordering.
+ */
+export function cleanRawGeoSamples<T extends CleanGeoSample>(samples: T[]): T[] {
+  const valid = samples
+    .filter((s) => isValidGeoCoord(s.lat, s.lon) && Number.isFinite(s.timeMs))
+    .sort((a, b) => a.timeMs - b.timeMs);
+
+  if (valid.length <= 2) return valid;
+
+  const cleaned: T[] = [valid[0]];
+
+  for (let i = 1; i < valid.length; i += 1) {
+    const prev = cleaned[cleaned.length - 1];
+    const curr = valid[i];
+    const segKm = haversineDistanceKm(prev.lat, prev.lon, curr.lat, curr.lon);
+    const segM = segKm * 1000;
+    const dtSec = Math.max(0.1, (curr.timeMs - prev.timeMs) / 1000);
+    const speedMps = segM / dtSec;
+
+    // Duplicate sample (< 0.35 m movement), except always keep final sample if needed
+    if (segM < 0.35 && i < valid.length - 1) {
+      continue;
+    }
+
+    // Reject isolated GPS teleport/multipath outlier spikes (>14 m/s or bounce-back spike)
+    if (speedMps > 14.0 && segM > 35 && i < valid.length - 1) {
+      const next = valid[i + 1];
+      const skipDistKm = haversineDistanceKm(prev.lat, prev.lon, next.lat, next.lon);
+      if (skipDistKm * 1000 < segM * 0.65 || speedMps > 22) {
+        continue;
+      }
+    }
+
+    cleaned.push(curr);
+  }
+
+  return cleaned.length >= 2 ? cleaned : valid;
+}
+
+/**
+ * Computes adaptive target point budget based on route distance and geometric complexity.
+ */
+export function computeAdaptivePointBudget(totalDistanceKm: number): number {
+  if (totalDistanceKm < 5) {
+    return 420; // Short routes target 300-500 points
+  }
+  if (totalDistanceKm <= 20) {
+    return Math.round(520 + ((totalDistanceKm - 5) / 15) * 440); // Medium routes: 520-960 points
+  }
+  // Long routes scale smoothly up to 1500 points without sacrificing bends
+  return Math.min(1500, Math.round(960 + (totalDistanceKm - 20) * 14));
+}
+
+function perpDistance2D(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const lenSq = dx * dx + dz * dz;
+  if (lenSq < 1e-8) return Math.hypot(px - ax, pz - az);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
+  return Math.hypot(px - (ax + t * dx), pz - (az + t * dz));
+}
+
+function headingAngleChangeRad(
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  cx: number,
+  cz: number,
+): number {
+  const v1x = bx - ax;
+  const v1z = bz - az;
+  const v2x = cx - bx;
+  const v2z = cz - bz;
+  const l1 = Math.hypot(v1x, v1z);
+  const l2 = Math.hypot(v2x, v2z);
+  if (l1 < 0.8 || l2 < 0.8) return 0;
+  const dot = Math.max(-1, Math.min(1, (v1x * v2x + v1z * v2z) / (l1 * l2)));
+  return Math.acos(dot);
+}
+
+/**
+ * Direction-aware Douglas-Peucker + sharp-turn/elevation anchor simplifier.
+ * Preserves sharp corners, start/finish, and significant elevation peaks cleanly.
+ */
+export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
+  samples: T[],
+  totalDistanceKm: number,
+  explicitTarget?: number,
+): T[] {
+  const targetBudget = explicitTarget ?? computeAdaptivePointBudget(totalDistanceKm);
+  if (samples.length <= targetBudget) {
+    return samples;
+  }
+
+  let latSum = 0;
+  let lonSum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    latSum += samples[i].lat;
+    lonSum += samples[i].lon;
+  }
+  const cLat = latSum / samples.length;
+  const cLon = lonSum / samples.length;
+  const cosLat = Math.max(0.15, Math.cos(toRad(cLat)));
+  const mLat = 111320;
+  const mLon = 111320 * cosLat;
+
+  const xs = new Float64Array(samples.length);
+  const zs = new Float64Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) {
+    xs[i] = (samples[i].lon - cLon) * mLon;
+    zs[i] = -(samples[i].lat - cLat) * mLat;
+  }
+
+  // Anchor points: start, end, highest & lowest elevation, sharp direction turns (>= 22 deg)
+  const anchors = new Uint8Array(samples.length);
+  anchors[0] = 1;
+  anchors[samples.length - 1] = 1;
+
+  let minEleIdx = 0;
+  let maxEleIdx = 0;
+  for (let i = 1; i < samples.length - 1; i += 1) {
+    const ele = samples[i].elevationM ?? 0;
+    if (ele > (samples[maxEleIdx].elevationM ?? -Infinity)) maxEleIdx = i;
+    if (ele < (samples[minEleIdx].elevationM ?? Infinity)) minEleIdx = i;
+
+    const turnAngle = headingAngleChangeRad(
+      xs[i - 1],
+      zs[i - 1],
+      xs[i],
+      zs[i],
+      xs[i + 1],
+      zs[i + 1],
+    );
+    if (turnAngle >= 0.38) {
+      // ~22 degrees
+      anchors[i] = 1;
+    }
+  }
+  anchors[minEleIdx] = 1;
+  anchors[maxEleIdx] = 1;
+
+  // Iterative Douglas-Peucker scoring every vertex by its max orthogonal error
+  const scores = new Float64Array(samples.length);
+  const stack: Array<[number, number]> = [[0, samples.length - 1]];
+  while (stack.length > 0) {
+    const [i0, i1] = stack.pop()!;
+    if (i1 - i0 <= 1) continue;
+    let maxDist = -1;
+    let bestIdx = -1;
+    for (let i = i0 + 1; i < i1; i += 1) {
+      const d = perpDistance2D(xs[i], zs[i], xs[i0], zs[i0], xs[i1], zs[i1]);
+      if (d > maxDist) {
+        maxDist = d;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx > i0 && bestIdx < i1) {
+      scores[bestIdx] = maxDist;
+      stack.push([i0, bestIdx], [bestIdx, i1]);
+    }
+  }
+
+  // Select top indices: all anchors + highest DP error points + sparse straight-line cadence coverage
+  const ranked: number[] = [];
+  for (let i = 1; i < samples.length - 1; i += 1) {
+    ranked.push(i);
+  }
+  ranked.sort((a, b) => {
+    const aScore = scores[a] + (anchors[a] ? 50 : 0);
+    const bScore = scores[b] + (anchors[b] ? 50 : 0);
+    return bScore - aScore;
+  });
+
+  const keep = new Set<number>([0, samples.length - 1]);
+  // Reserve 80% for highest geometric value (DP + turns + peaks), 20% uniform coverage along long straights
+  const geomSlots = Math.floor((targetBudget - 2) * 0.8);
+  for (let k = 0; k < ranked.length && keep.size < geomSlots + 2; k += 1) {
+    keep.add(ranked[k]);
+  }
+  const uniformStep = (samples.length - 1) / Math.max(1, targetBudget - 1);
+  for (let u = 0; u < targetBudget && keep.size < targetBudget; u += 1) {
+    keep.add(Math.min(samples.length - 1, Math.round(u * uniformStep)));
+  }
+
+  return Array.from(keep)
+    .sort((a, b) => a - b)
+    .map((idx) => samples[idx]);
+}
+
+export function latLonToMetricLocal(
+  lat: number,
+  lon: number,
+  centerLat: number,
+  centerLon: number,
+): { xM: number; zM: number } {
+  const cosLat = Math.max(0.15, Math.cos(toRad(centerLat)));
+  return {
+    xM: (lon - centerLon) * 111320 * cosLat,
+    zM: -(lat - centerLat) * 111320,
+  };
+}
+
+/**
+ * Binary-searches track points by cumulative distance (km) and returns an interpolated point.
+ * Ensures timeline progress maps linearly to physical distance covered rather than point count.
+ */
+export function sampleTrackPointByDistance(
+  points: Studio3DTrackPoint[],
+  totalDistanceKm: number,
+  routeProgress: number,
+): Studio3DTrackPoint {
+  if (points.length === 0) {
+    throw new Error('Track has no points.');
+  }
+  const clampedP = Math.min(1, Math.max(0, routeProgress));
+  if (points.length === 1 || clampedP <= 0) {
+    return points[0];
+  }
+  const maxDistKm = Math.max(0.001, points[points.length - 1].distanceKm || totalDistanceKm);
+  if (clampedP >= 1) {
+    return points[points.length - 1];
+  }
+
+  const targetDistKm = clampedP * maxDistKm;
+
+  let lo = 0;
+  let hi = points.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].distanceKm <= targetDistKm) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const p0 = points[lo];
+  const p1 = points[hi];
+  const spanKm = p1.distanceKm - p0.distanceKm;
+  const frac = spanKm > 1e-6 ? Math.min(1, Math.max(0, (targetDistKm - p0.distanceKm) / spanKm)) : 0;
+  const lerp = (a: number, b: number) => a + (b - a) * frac;
+
+  return {
+    lat: lerp(p0.lat, p1.lat),
+    lon: lerp(p0.lon, p1.lon),
+    xM: lerp(p0.xM, p1.xM),
+    zM: lerp(p0.zM, p1.zM),
+    elevationM: lerp(p0.elevationM, p1.elevationM),
+    elapsedSec: Math.round(lerp(p0.elapsedSec, p1.elapsedSec)),
+    distanceKm: lerp(p0.distanceKm, p1.distanceKm),
+    paceSecPerKm: Math.round(lerp(p0.paceSecPerKm, p1.paceSecPerKm)),
+    hr: Math.round(lerp(p0.hr, p1.hr)),
+    cadence: Math.round(lerp(p0.cadence, p1.cadence)),
+  };
+}
+
+/**
+ * Builds an overshoot-free, terrain-grounded 3D polyline with tight quadratic corner fillets
+ * clamped within maxCornerFilletM (default 2.0m) so sharp street corners never bulge off the road.
+ */
+export function buildGroundedRoutePath(
+  points: Studio3DTrackPoint[],
+  sampleGroundY: (xM: number, zM: number) => number,
+  options?: {
+    heightOffsetM?: number;
+    maxSegmentLenM?: number;
+    maxCornerFilletM?: number;
+  },
+): GroundedRoutePath {
+  const heightOffsetM = options?.heightOffsetM ?? 0.22;
+  const maxSegmentLenM = options?.maxSegmentLenM ?? 7.5;
+  const maxCornerFilletM = options?.maxCornerFilletM ?? 1.8;
+
+  if (points.length === 0) {
+    return { vertices: [], totalArcMeters: 0 };
+  }
+  if (points.length === 1) {
+    const p = points[0];
+    return {
+      vertices: [{ x: p.xM, y: sampleGroundY(p.xM, p.zM) + heightOffsetM, z: p.zM, distM: 0, yawRad: 0 }],
+      totalArcMeters: 0,
+    };
+  }
+
+  // First pass: clamp sharp corners with tiny tangent-bounded quadratic fillets (prevents spline overshoot)
+  const xzRaw: Array<{ x: number; z: number }> = [];
+  xzRaw.push({ x: points[0].xM, z: points[0].zM });
+
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const next = points[i + 1];
+
+    const dx1 = curr.xM - prev.xM;
+    const dz1 = curr.zM - prev.zM;
+    const l1 = Math.hypot(dx1, dz1);
+
+    const dx2 = next.xM - curr.xM;
+    const dz2 = next.zM - curr.zM;
+    const l2 = Math.hypot(dx2, dz2);
+
+    if (l1 < 0.4 || l2 < 0.4) {
+      xzRaw.push({ x: curr.xM, z: curr.zM });
+      continue;
+    }
+
+    const dot = Math.max(-1, Math.min(1, (dx1 * dx2 + dz1 * dz2) / (l1 * l2)));
+    const turnAngle = Math.acos(dot);
+
+    if (turnAngle < 0.26) {
+      xzRaw.push({ x: curr.xM, z: curr.zM });
+    } else {
+      const trim = Math.min(maxCornerFilletM, l1 * 0.24, l2 * 0.24);
+      const ax = curr.xM - (dx1 / l1) * trim;
+      const az = curr.zM - (dz1 / l1) * trim;
+      const bx = curr.xM + (dx2 / l2) * trim;
+      const bz = curr.zM + (dz2 / l2) * trim;
+      const midX = 0.25 * ax + 0.5 * curr.xM + 0.25 * bx;
+      const midZ = 0.25 * az + 0.5 * curr.zM + 0.25 * bz;
+      xzRaw.push({ x: ax, z: az }, { x: midX, z: midZ }, { x: bx, z: bz });
+    }
+  }
+  const last = points[points.length - 1];
+  xzRaw.push({ x: last.xM, z: last.zM });
+
+  // Second pass: adaptive terrain subdivision along every straight span
+  const vertices: GroundedRouteVertex[] = [];
+  let cumDistM = 0;
+
+  const pushVertex = (x: number, z: number) => {
+    if (vertices.length > 0) {
+      const prevV = vertices[vertices.length - 1];
+      const seg = Math.hypot(x - prevV.x, z - prevV.z);
+      if (seg < 0.15) return;
+      cumDistM += seg;
+    }
+    vertices.push({
+      x,
+      y: sampleGroundY(x, z) + heightOffsetM,
+      z,
+      distM: cumDistM,
+      yawRad: 0,
+    });
+  };
+
+  pushVertex(xzRaw[0].x, xzRaw[0].z);
+  for (let i = 1; i < xzRaw.length; i += 1) {
+    const a = xzRaw[i - 1];
+    const b = xzRaw[i];
+    const segLen = Math.hypot(b.x - a.x, b.z - a.z);
+    if (segLen < 0.15 && i < xzRaw.length - 1) continue;
+    const subDivs = Math.max(1, Math.min(8, Math.ceil(segLen / maxSegmentLenM)));
+    for (let s = 1; s <= subDivs; s += 1) {
+      const t = s / subDivs;
+      pushVertex(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t);
+    }
+  }
+
+  // Third pass: smoothed forward yaw around a local metric window (+-6m) for fluid avatar turning
+  for (let i = 0; i < vertices.length; i += 1) {
+    const i0 = Math.max(0, i - 2);
+    const i1 = Math.min(vertices.length - 1, i + 2);
+    const dx = vertices[i1].x - vertices[i0].x;
+    const dz = vertices[i1].z - vertices[i0].z;
+    if (Math.hypot(dx, dz) > 0.05) {
+      vertices[i].yawRad = Math.atan2(dx, dz);
+    } else if (i > 0) {
+      vertices[i].yawRad = vertices[i - 1].yawRad;
+    }
+  }
+
+  return {
+    vertices,
+    totalArcMeters: cumDistM,
+  };
+}
+
+/**
+ * Samples smoothed 3D position and heading yaw along the grounded route by normalized
+ * cumulative distance progress (0..1), with zero allocations when outPos is provided.
+ */
+export function sampleGroundedRouteAtProgress(
+  path: GroundedRoutePath,
+  routeProgress: number,
+  outPos?: THREE.Vector3,
+): { position: THREE.Vector3; yawRad: number } {
+  const pos = outPos ?? new THREE.Vector3();
+  const verts = path.vertices;
+  if (verts.length === 0) {
+    pos.set(0, 0, 0);
+    return { position: pos, yawRad: 0 };
+  }
+  if (verts.length === 1 || routeProgress <= 0) {
+    pos.set(verts[0].x, verts[0].y, verts[0].z);
+    return { position: pos, yawRad: verts[0].yawRad };
+  }
+  if (routeProgress >= 1) {
+    const tail = verts[verts.length - 1];
+    pos.set(tail.x, tail.y, tail.z);
+    return { position: pos, yawRad: tail.yawRad };
+  }
+
+  const targetDistM = routeProgress * path.totalArcMeters;
+  let lo = 0;
+  let hi = verts.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (verts[mid].distM <= targetDistM) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const v0 = verts[lo];
+  const v1 = verts[hi];
+  const spanM = v1.distM - v0.distM;
+  const t = spanM > 1e-4 ? Math.min(1, Math.max(0, (targetDistM - v0.distM) / spanM)) : 0;
+
+  pos.set(
+    v0.x + (v1.x - v0.x) * t,
+    v0.y + (v1.y - v0.y) * t,
+    v0.z + (v1.z - v0.z) * t,
+  );
+
+  // Shortest-arc yaw interpolation
+  let diff = v1.yawRad - v0.yawRad;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const yawRad = v0.yawRad + diff * t;
+
+  return { position: pos, yawRad };
+}
+
+/**
+ * Builds an index-capped tapered ribbon or slim tube BufferGeometry directly along grounded vertices,
+ * preserving exact GPS shape with zero spline overshoot and clean single draw-call progress slicing.
+ */
+export function buildSlimRouteRibbonGeometry(
+  path: GroundedRoutePath,
+  halfWidthM: number,
+  options?: { tileLenM?: number },
+): THREE.BufferGeometry {
+  const verts = path.vertices;
+  const geo = new THREE.BufferGeometry();
+  if (verts.length < 2) {
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    return geo;
+  }
+
+  const n = verts.length;
+  const positions = new Float32Array(n * 2 * 3);
+  const normals = new Float32Array(n * 2 * 3);
+  const uvs = new Float32Array(n * 2 * 2);
+  const indices = new Uint32Array((n - 1) * 6);
+
+  const tileLenM = options?.tileLenM ?? Math.max(3.6, halfWidthM * 6.5);
+
+  for (let i = 0; i < n; i += 1) {
+    const prev = verts[Math.max(0, i - 1)];
+    const next = verts[Math.min(n - 1, i + 1)];
+    let tx = next.x - prev.x;
+    let tz = next.z - prev.z;
+    const len = Math.hypot(tx, tz) || 1;
+    tx /= len;
+    tz /= len;
+    // Perpendicular right vector on XZ plane
+    const nx = -tz;
+    const nz = tx;
+
+    const curr = verts[i];
+    const baseV = i * 2;
+
+    positions[baseV * 3] = curr.x - nx * halfWidthM;
+    positions[baseV * 3 + 1] = curr.y;
+    positions[baseV * 3 + 2] = curr.z - nz * halfWidthM;
+
+    positions[(baseV + 1) * 3] = curr.x + nx * halfWidthM;
+    positions[(baseV + 1) * 3 + 1] = curr.y;
+    positions[(baseV + 1) * 3 + 2] = curr.z + nz * halfWidthM;
+
+    normals[baseV * 3 + 1] = 1;
+    normals[(baseV + 1) * 3 + 1] = 1;
+
+    const vCoord = curr.distM / tileLenM;
+    uvs[baseV * 2] = 0;
+    uvs[baseV * 2 + 1] = vCoord;
+    uvs[(baseV + 1) * 2] = 1;
+    uvs[(baseV + 1) * 2 + 1] = vCoord;
+  }
+
+  for (let i = 0; i < n - 1; i += 1) {
+    const a = i * 2;
+    const b = a + 1;
+    const c = a + 2;
+    const d = a + 3;
+    const idxOffset = i * 6;
+    indices[idxOffset] = a;
+    indices[idxOffset + 1] = b;
+    indices[idxOffset + 2] = c;
+    indices[idxOffset + 3] = b;
+    indices[idxOffset + 4] = d;
+    indices[idxOffset + 5] = c;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+  geo.computeBoundingSphere();
+
+  return geo;
+}
+
+const PACE_FAST_COLOR = new THREE.Color('#10B981');
+const PACE_MOD_COLOR = new THREE.Color('#F59E0B');
+const PACE_SLOW_COLOR = new THREE.Color('#EF4444');
+
+export function paceSecToColor(paceSecPerKm: number, outColor?: THREE.Color): THREE.Color {
+  const c = outColor ?? new THREE.Color();
+  const clamped = Math.min(480, Math.max(210, Number.isFinite(paceSecPerKm) ? paceSecPerKm : 340));
+  if (clamped <= 270) {
+    return c.copy(PACE_FAST_COLOR);
+  }
+  if (clamped <= 345) {
+    return c.lerpColors(PACE_FAST_COLOR, PACE_MOD_COLOR, (clamped - 270) / 75);
+  }
+  if (clamped <= 420) {
+    return c.lerpColors(PACE_MOD_COLOR, PACE_SLOW_COLOR, (clamped - 345) / 75);
+  }
+  return c.copy(PACE_SLOW_COLOR);
+}
+
+/**
+ * Builds a Google Maps traffic/pace-gradient route ribbon BufferGeometry with per-vertex
+ * RGB colors smoothly interpolated from trackPoints pace (fast emerald -> amber -> slow coral).
+ */
+export function buildPaceColoredRouteRibbonGeometry(
+  path: GroundedRoutePath,
+  trackPoints: Studio3DTrackPoint[],
+  halfWidthM: number,
+  options?: { tileLenM?: number },
+): THREE.BufferGeometry {
+  const geo = buildSlimRouteRibbonGeometry(path, halfWidthM, options);
+  const verts = path.vertices;
+  if (verts.length < 2) return geo;
+
+  const colors = new Float32Array(verts.length * 2 * 3);
+  const totalMeters = Math.max(1, path.totalArcMeters);
+  const maxDistKm =
+    trackPoints.length > 0
+      ? Math.max(0.01, trackPoints[trackPoints.length - 1].distanceKm)
+      : totalMeters / 1000;
+  const tmpColor = new THREE.Color();
+
+  for (let i = 0; i < verts.length; i += 1) {
+    const progress = verts[i].distM / totalMeters;
+    const sampledPt =
+      trackPoints.length > 0
+        ? sampleTrackPointByDistance(trackPoints, maxDistKm, progress)
+        : null;
+    paceSecToColor(sampledPt?.paceSecPerKm ?? 340, tmpColor);
+
+    const baseV = i * 2;
+    colors[baseV * 3] = tmpColor.r;
+    colors[baseV * 3 + 1] = tmpColor.g;
+    colors[baseV * 3 + 2] = tmpColor.b;
+
+    colors[(baseV + 1) * 3] = tmpColor.r;
+    colors[(baseV + 1) * 3 + 1] = tmpColor.g;
+    colors[(baseV + 1) * 3 + 2] = tmpColor.b;
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
+
+
+==================== src/utils/studio3dMapTiles.ts ====================
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import {
+  normalizeMapStyle3D,
+  type CanonicalMapStyle3D,
+  type MapStyle3D,
+  type OsmBuildingFootprint,
+  type OsmRoadWay,
+  type Studio3DTrack,
+} from '../types/studio3d';
+
+export interface TerrainGridConfig {
+  widthMeters: number;
+  depthMeters: number;
+  northLat: number;
+  southLat: number;
+  westLon: number;
+  eastLon: number;
+  zoom: number;
+  tileXMin: number;
+  tileXMax: number;
+  tileYMin: number;
+  tileYMax: number;
+}
+
+function latToTileYFloat(lat: number, zoom: number): number {
+  const rad = (lat * Math.PI) / 180;
+  const n = Math.pow(2, zoom);
+  return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n;
+}
+
+function lonToTileXFloat(lon: number, zoom: number): number {
+  const n = Math.pow(2, zoom);
+  return ((lon + 180) / 360) * n;
+}
+
+function tileXToLon(tileX: number, zoom: number): number {
+  return (tileX / Math.pow(2, zoom)) * 360 - 180;
+}
+
+function tileYToLat(tileY: number, zoom: number): number {
+  const n = Math.PI - (2 * Math.PI * tileY) / Math.pow(2, zoom);
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+/**
+ * Computes the Web Mercator tile bounding grid and real-world metric dimensions
+ * covering the track + generous surround so terrain never clips during overview or drone shots.
+ */
+export function computeTerrainGridConfig(track: Studio3DTrack): TerrainGridConfig {
+  const spanDegLat = Math.max(0.005, track.maxLat - track.minLat);
+  const spanDegLon = Math.max(0.005, track.maxLon - track.minLon);
+  const padLat = Math.max(0.0032, spanDegLat * 0.52);
+  const padLon = Math.max(0.0032, spanDegLon * 0.52);
+
+  const rawSouth = Math.max(-84, track.minLat - padLat);
+  const rawNorth = Math.min(84, track.maxLat + padLat);
+  const rawWest = track.minLon - padLon;
+  const rawEast = track.maxLon + padLon;
+
+  // Choose zoom level favoring sharp z17/z16 street & satellite tiles when grid stays <= 7x7 tiles
+  let zoom = 15;
+  for (let z = 17; z >= 12; z -= 1) {
+    const xMin = Math.floor(lonToTileXFloat(rawWest, z));
+    const xMax = Math.floor(lonToTileXFloat(rawEast, z));
+    const yMin = Math.floor(latToTileYFloat(rawNorth, z));
+    const yMax = Math.floor(latToTileYFloat(rawSouth, z));
+    const maxGrid = z >= 17 ? 7 : 6;
+    if (xMax - xMin + 1 <= maxGrid && yMax - yMin + 1 <= maxGrid) {
+      zoom = z;
+      break;
+    }
+  }
+
+  const maxIdx = Math.pow(2, zoom) - 1;
+  const tileXMin = Math.max(0, Math.floor(lonToTileXFloat(rawWest, zoom)));
+  const tileXMax = Math.min(maxIdx, Math.floor(lonToTileXFloat(rawEast, zoom)));
+  const tileYMin = Math.max(0, Math.floor(latToTileYFloat(rawNorth, zoom)));
+  const tileYMax = Math.min(maxIdx, Math.floor(latToTileYFloat(rawSouth, zoom)));
+
+  const northLat = tileYToLat(tileYMin, zoom);
+  const southLat = tileYToLat(tileYMax + 1, zoom);
+  const westLon = tileXToLon(tileXMin, zoom);
+  const eastLon = tileXToLon(tileXMax + 1, zoom);
+
+  const cosLat = Math.max(0.15, Math.cos((track.centerLat * Math.PI) / 180));
+  const widthMeters = (eastLon - westLon) * 111320 * cosLat;
+  const depthMeters = (northLat - southLat) * 111320;
+
+  return {
+    widthMeters,
+    depthMeters,
+    northLat,
+    southLat,
+    westLon,
+    eastLon,
+    zoom,
+    tileXMin,
+    tileXMax,
+    tileYMin,
+    tileYMax,
+  };
+}
+
+export function latLonToLocalMeters(
+  lat: number,
+  lon: number,
+  centerLat: number,
+  centerLon: number,
+): { xM: number; zM: number } {
+  const cosLat = Math.max(0.15, Math.cos((centerLat * Math.PI) / 180));
+  return {
+    xM: (lon - centerLon) * 111320 * cosLat,
+    zM: -(lat - centerLat) * 111320,
+  };
+}
+
+export interface RealDemGrid {
+  northLat: number;
+  southLat: number;
+  westLon: number;
+  eastLon: number;
+  rows: number;
+  cols: number;
+  elevationsM: number[];
+  minDemM?: number;
+  maxDemM?: number;
+}
+
+function sampleDemGridBilinearAbs(
+  xM: number,
+  zM: number,
+  track: Studio3DTrack,
+  demGrid: RealDemGrid,
+): number {
+  const cosLat = Math.max(0.15, Math.cos((track.centerLat * Math.PI) / 180));
+  const lat = track.centerLat - zM / 111320;
+  const lon = track.centerLon + xM / (111320 * cosLat);
+
+  const u = THREE.MathUtils.clamp(
+    (lon - demGrid.westLon) / Math.max(1e-6, demGrid.eastLon - demGrid.westLon),
+    0,
+    1,
+  );
+  const v = THREE.MathUtils.clamp(
+    (demGrid.northLat - lat) / Math.max(1e-6, demGrid.northLat - demGrid.southLat),
+    0,
+    1,
+  );
+
+  const fx = u * (demGrid.cols - 1);
+  const fy = v * (demGrid.rows - 1);
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = Math.min(demGrid.cols - 1, x0 + 1);
+  const y1 = Math.min(demGrid.rows - 1, y0 + 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+
+  const e00 = demGrid.elevationsM[y0 * demGrid.cols + x0];
+  const e10 = demGrid.elevationsM[y0 * demGrid.cols + x1];
+  const e01 = demGrid.elevationsM[y1 * demGrid.cols + x0];
+  const e11 = demGrid.elevationsM[y1 * demGrid.cols + x1];
+  return (e00 * (1 - tx) + e10 * tx) * (1 - ty) + (e01 * (1 - tx) + e11 * tx) * ty;
+}
+
+/**
+ * Samples real 3D terrain elevation (Three.js world Y in meters) at any local (xM, zM) coordinate.
+ * Fuses Copernicus/ASTER DEM grid with smoothed GPX/TCX elevation while damping GPS altitude noise,
+ * with ZERO fictional sinusoidal hills so flat city venues remain accurately flat.
+ */
+export function sampleTerrainY(
+  xM: number,
+  zM: number,
+  track: Studio3DTrack,
+  demGrid?: RealDemGrid | null,
+): number {
+  const hasValidDem =
+    Boolean(demGrid) &&
+    demGrid!.elevationsM.length === demGrid!.rows * demGrid!.cols &&
+    demGrid!.elevationsM.length >= 4;
+
+  let demMin = demGrid?.minDemM;
+  let demMax = demGrid?.maxDemM;
+  if (hasValidDem && (demMin === undefined || demMax === undefined)) {
+    demMin = Math.min(...demGrid!.elevationsM);
+    demMax = Math.max(...demGrid!.elevationsM);
+  }
+
+  const demSpan =
+    hasValidDem && demMin !== undefined && demMax !== undefined
+      ? Math.max(0, demMax - demMin)
+      : 0;
+  const gpxSpan = Math.max(0, track.maxElevationM - track.minElevationM);
+  const effectiveSpan = hasValidDem ? Math.max(demSpan, Math.min(gpxSpan, demSpan + 8)) : gpxSpan;
+
+  // Subtle vertical relief scaling only for genuine hills (>= 10m); keep flat urban parks strictly 1:1
+  const verticalScale =
+    effectiveSpan >= 10 ? Math.min(1.5, Math.max(1.05, 16 / effectiveSpan)) : 1.0;
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+  const pts = track.points;
+  const stride = pts.length > 140 ? Math.ceil(pts.length / 72) : 1;
+
+  for (let i = 0; i < pts.length; i += stride) {
+    const p = pts[i];
+    const dx = xM - p.xM;
+    const dz = zM - p.zM;
+    const distSq = dx * dx + dz * dz;
+    const weight = 1 / (distSq + 2200);
+    weightedSum += (p.elevationM - track.minElevationM) * weight;
+    totalWeight += weight;
+  }
+
+  const routeRel = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
+  if (!hasValidDem || demMin === undefined) {
+    return Math.max(0, routeRel * verticalScale);
+  }
+
+  const demAbs = sampleDemGridBilinearAbs(xM, zM, track, demGrid!);
+  const baseFloor = Math.min(demMin, track.minElevationM);
+  const demRel = Math.max(0, demAbs - baseFloor);
+
+  // Clamp GPX noise spikes that diverge strongly from authentic DEM surface (e.g. barometric drift)
+  const routeAnchoredAbs = track.minElevationM + routeRel;
+  const clampedRouteDiff = THREE.MathUtils.clamp(routeAnchoredAbs - demAbs, -4.5, 4.5);
+  const denoisedRouteRel = Math.max(0, demRel + clampedRouteDiff * 0.45);
+
+  const distFromCenter = Math.hypot(xM, zM);
+  const outerWeight = THREE.MathUtils.clamp((distFromCenter - track.spanMeters * 0.25) / 420, 0.25, 0.92);
+  return Math.max(0, (denoisedRouteRel * (1 - outerWeight) + demRel * outerWeight) * verticalScale);
+}
+
+/**
+ * Fetches an adaptive 9x9 or 11x11 real Copernicus/ASTER DEM elevation grid from /api/map-elevation.
+ */
+export async function fetchRealDemGridForTrack(
+  grid: TerrainGridConfig,
+  signal?: AbortSignal,
+  spanMeters = 1000,
+): Promise<RealDemGrid | null> {
+  const dim = spanMeters > 2400 ? 11 : 9;
+  const rows = dim;
+  const cols = dim;
+  const lats: number[] = [];
+  const lons: number[] = [];
+
+  for (let r = 0; r < rows; r += 1) {
+    const lat = grid.northLat - (r / (rows - 1)) * (grid.northLat - grid.southLat);
+    for (let c = 0; c < cols; c += 1) {
+      const lon = grid.westLon + (c / (cols - 1)) * (grid.eastLon - grid.westLon);
+      lats.push(lat);
+      lons.push(lon);
+    }
+  }
+
+  try {
+    const res = await fetch(
+      `/api/map-elevation?lats=${lats.map((v) => v.toFixed(5)).join(',')}&lons=${lons.map((v) => v.toFixed(5)).join(',')}`,
+      { signal },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { elevations?: number[] };
+    if (!Array.isArray(data.elevations) || data.elevations.length !== rows * cols) {
+      return null;
+    }
+    let minDemM = Infinity;
+    let maxDemM = -Infinity;
+    for (const e of data.elevations) {
+      if (e < minDemM) minDemM = e;
+      if (e > maxDemM) maxDemM = e;
+    }
+    return {
+      northLat: grid.northLat,
+      southLat: grid.southLat,
+      westLon: grid.westLon,
+      eastLon: grid.eastLon,
+      rows,
+      cols,
+      elevationsM: data.elevations,
+      minDemM: Number.isFinite(minDemM) ? minDemM : 0,
+      maxDemM: Number.isFinite(maxDemM) ? maxDemM : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Draws a clean, neutral cartographic loading grid (no fake parks, rivers, or fictional roads)
+ * while real Web Mercator map tiles download.
+ */
+export function drawLoadingTileGrid(
+  canvas: HTMLCanvasElement,
+  style: MapStyle3D,
+  cols: number,
+  rows: number,
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  const normalized = normalizeMapStyle3D(style);
+  const isDark =
+    style === 'night' || normalized === 'satellite' || normalized === 'hybrid';
+  const bg = isDark
+    ? '#0F172A'
+    : normalized === 'monochrome'
+      ? '#E2E8F0'
+      : normalized === 'liberty'
+        ? '#F4F0E8'
+        : normalized === 'city3d'
+          ? '#EEF2F6'
+          : '#E8EDF2';
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const tileW = w / Math.max(1, cols);
+  const tileH = h / Math.max(1, rows);
+  ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.14)' : 'rgba(100, 116, 139, 0.16)';
+  ctx.lineWidth = 1;
+
+  for (let c = 0; c <= cols; c += 1) {
+    const x = Math.round(c * tileW);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  for (let r = 0; r <= rows; r += 1) {
+    const y = Math.round(r * tileH);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+}
+
+function loadTileImage(url: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+export interface TileLoadProgress {
+  phase: 'loading' | 'ready' | 'partial' | 'error';
+  loadedTiles: number;
+  failedTiles: number;
+  totalTiles: number;
+  zoom: number;
+}
+
+function resolveServerTileStyle(
+  style: MapStyle3D,
+  includeLabels = true,
+): CanonicalMapStyle3D | 'night' | 'liberty-nolabels' {
+  if (style === 'night') return 'night';
+  const normalized = normalizeMapStyle3D(style);
+  if (normalized === 'liberty' && !includeLabels) {
+    return 'liberty-nolabels';
+  }
+  return normalized;
+}
+
+/**
+ * Loads CORS-safe real Web Mercator raster tiles in controlled batches onto CanvasTexture
+ * and streams exact progress updates without inventing fictional map artwork.
+ */
+export async function buildMapCompositeTexture(
+  grid: TerrainGridConfig,
+  style: MapStyle3D,
+  maxAnisotropy: number,
+  signal?: AbortSignal,
+  onProgress?: (progress: TileLoadProgress) => void,
+  cacheBust?: number,
+  includeLabels = true,
+): Promise<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; completion: Promise<void> }> {
+  const cols = grid.tileXMax - grid.tileXMin + 1;
+  const rows = grid.tileYMax - grid.tileYMin + 1;
+  const totalTiles = cols * rows;
+  const tileSize = 256;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cols * tileSize;
+  canvas.height = rows * tileSize;
+  drawLoadingTileGrid(canvas, style, cols, rows);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+
+  onProgress?.({
+    phase: 'loading',
+    loadedTiles: 0,
+    failedTiles: 0,
+    totalTiles,
+    zoom: grid.zoom,
+  });
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return { texture, canvas, completion: Promise.resolve() };
+  }
+
+  const jobs: Array<{ tx: number; ty: number; dx: number; dy: number; dist: number }> = [];
+  const midC = (cols - 1) / 2;
+  const midR = (rows - 1) / 2;
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      jobs.push({
+        tx: grid.tileXMin + col,
+        ty: grid.tileYMin + row,
+        dx: col * tileSize,
+        dy: row * tileSize,
+        dist: Math.hypot(col - midC, row - midR),
+      });
+    }
+  }
+  jobs.sort((a, b) => a.dist - b.dist);
+
+  let loadedTiles = 0;
+  let failedTiles = 0;
+  const bustQuery = cacheBust ? `?v=${cacheBust}` : '';
+  const serverStyle = resolveServerTileStyle(style, includeLabels);
+  const isMonochrome = serverStyle === 'monochrome';
+  const overlayHybridLabels = serverStyle === 'hybrid' && includeLabels;
+  const overlayMonoLabels = isMonochrome && includeLabels;
+
+  // Scratch 256x256 canvas for clean grayscale luminance conversion on Monochrome fallback tiles
+  const monoScratch = isMonochrome ? document.createElement('canvas') : null;
+  if (monoScratch) {
+    monoScratch.width = tileSize;
+    monoScratch.height = tileSize;
+  }
+  const monoCtx = monoScratch?.getContext('2d') ?? null;
+
+  const drawMonochromeTile = (img: HTMLImageElement, dx: number, dy: number) => {
+    if (!monoCtx || !monoScratch) {
+      ctx.drawImage(img, dx, dy, tileSize, tileSize);
+      return;
+    }
+    monoCtx.clearRect(0, 0, tileSize, tileSize);
+    monoCtx.drawImage(img, 0, 0, tileSize, tileSize);
+    const imgData = monoCtx.getImageData(0, 0, tileSize, tileSize);
+    const d = imgData.data;
+    for (let p = 0; p < d.length; p += 4) {
+      const lum = d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114;
+      const graded = Math.min(255, Math.max(0, (lum - 128) * 1.14 + 132));
+      d[p] = graded;
+      d[p + 1] = graded;
+      d[p + 2] = Math.min(255, graded + 3);
+    }
+    monoCtx.putImageData(imgData, 0, 0);
+    ctx.drawImage(monoScratch, dx, dy, tileSize, tileSize);
+  };
+
+  const completion = (async () => {
+    const batchSize = 6;
+    for (let i = 0; i < jobs.length; i += batchSize) {
+      if (signal?.aborted) return;
+      const batch = jobs.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (job) => {
+          if (signal?.aborted) return;
+          const baseImg = await loadTileImage(
+            `/api/map-tiles/${serverStyle}/${grid.zoom}/${job.tx}/${job.ty}${bustQuery}`,
+          );
+          if (signal?.aborted) return;
+
+          if (baseImg) {
+            if (isMonochrome) {
+              drawMonochromeTile(baseImg, job.dx, job.dy);
+            } else {
+              ctx.drawImage(baseImg, job.dx, job.dy, tileSize, tileSize);
+            }
+            if (overlayHybridLabels || overlayMonoLabels) {
+              const labelLayer = overlayHybridLabels ? 'satellite-labels' : 'monochrome-labels';
+              const labelImg = await loadTileImage(
+                `/api/map-tiles/${labelLayer}/${grid.zoom}/${job.tx}/${job.ty}${bustQuery}`,
+              );
+              if (!signal?.aborted && labelImg) {
+                if (isMonochrome) {
+                  ctx.save();
+                  ctx.globalAlpha = 0.86;
+                  ctx.drawImage(labelImg, job.dx, job.dy, tileSize, tileSize);
+                  ctx.restore();
+                } else {
+                  ctx.drawImage(labelImg, job.dx, job.dy, tileSize, tileSize);
+                }
+              }
+            }
+            loadedTiles += 1;
+            texture.needsUpdate = true;
+          } else {
+            failedTiles += 1;
+          }
+
+          const finished = loadedTiles + failedTiles;
+          onProgress?.({
+            phase:
+              finished < totalTiles
+                ? 'loading'
+                : failedTiles === 0
+                  ? 'ready'
+                  : loadedTiles > 0
+                    ? 'partial'
+                    : 'error',
+            loadedTiles,
+            failedTiles,
+            totalTiles,
+            zoom: grid.zoom,
+          });
+        }),
+      );
+    }
+  })();
+
+  return { texture, canvas, completion };
+}
+
+function hash2d(x: number, y: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return h - Math.floor(h);
+}
+
+/**
+ * Computes seamless tileable micro-grain bump & roughness pixel buffers for Three.js PBR ground overlays.
+ */
+export function computeTerrainSurfaceDetailPixels(
+  size: number,
+  style: MapStyle3D,
+): { bumpRgba: Uint8Array; roughnessRgba: Uint8Array } {
+  const normalized = normalizeMapStyle3D(style);
+  const bumpRgba = new Uint8Array(size * size * 4);
+  const roughnessRgba = new Uint8Array(size * size * 4);
+
+  const isNatural = normalized === 'terrain' || normalized === 'satellite' || normalized === 'hybrid';
+  const baseRough = isNatural ? 215 : normalized === 'monochrome' ? 228 : 205;
+  const roughVar = isNatural ? 34 : 20;
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      // Tile-periodic trigonometric + pseudo-noise micro-relief
+      const u = (x / size) * Math.PI * 2;
+      const v = (y / size) * Math.PI * 2;
+      const coarse = Math.sin(u * 3 + Math.cos(v * 2)) * Math.cos(v * 3 - Math.sin(u * 2));
+      const grain = (hash2d(x % 64, y % 64) - 0.5) * 0.65 + (hash2d((x * 2) % 64, (y * 2) % 64) - 0.5) * 0.35;
+      const heightVal = isNatural ? coarse * 0.48 + grain * 0.52 : grain * 0.72 + coarse * 0.28;
+
+      const b = Math.min(255, Math.max(0, Math.round(128 + heightVal * 95)));
+      const r = Math.min(255, Math.max(110, Math.round(baseRough - heightVal * roughVar)));
+      const idx = (y * size + x) * 4;
+      bumpRgba[idx] = b;
+      bumpRgba[idx + 1] = b;
+      bumpRgba[idx + 2] = b;
+      bumpRgba[idx + 3] = 255;
+
+      roughnessRgba[idx] = r;
+      roughnessRgba[idx + 1] = r;
+      roughnessRgba[idx + 2] = r;
+      roughnessRgba[idx + 3] = 255;
+    }
+  }
+  return { bumpRgba, roughnessRgba };
+}
+
+/**
+ * Generates Three.js linear-space PBR bump & roughness DataTextures for the 3D terrain mesh.
+ */
+export function createTerrainSurfaceDetailMaps(
+  style: MapStyle3D,
+  widthMeters: number,
+  depthMeters: number,
+  maxAnisotropy: number,
+): { bumpMap: THREE.DataTexture; roughnessMap: THREE.DataTexture } {
+  const size = 128;
+  const { bumpRgba, roughnessRgba } = computeTerrainSurfaceDetailPixels(size, style);
+  const repeatX = Math.max(6, Math.round(widthMeters / 34));
+  const repeatY = Math.max(6, Math.round(depthMeters / 34));
+
+  const configureTex = (data: Uint8Array) => {
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeatX, repeatY);
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
+    tex.needsUpdate = true;
+    return tex;
+  };
+
+  return {
+    bumpMap: configureTex(bumpRgba),
+    roughnessMap: configureTex(roughnessRgba),
+  };
+}
+
+/**
+ * Computes RGBA pixel data for a Three.js terrain relief overlay texture:
+ * directional NW solar hillshade, cartographic elevation contour lines, and subtle edge atmosphere blend.
+ */
+export function computeTerrainReliefOverlayPixels(
+  size: number,
+  gridCenterX: number,
+  gridCenterZ: number,
+  widthMeters: number,
+  depthMeters: number,
+  track: Studio3DTrack,
+  demGrid: RealDemGrid | null,
+  style: MapStyle3D,
+): Uint8Array {
+  const normalized = normalizeMapStyle3D(style);
+  const rgba = new Uint8Array(size * size * 4);
+  const elevGrid = new Float32Array(size * size);
+
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let row = 0; row < size; row += 1) {
+    const v = row / Math.max(1, size - 1);
+    const zM = gridCenterZ + (v - 0.5) * depthMeters;
+    for (let col = 0; col < size; col += 1) {
+      const u = col / Math.max(1, size - 1);
+      const xM = gridCenterX + (u - 0.5) * widthMeters;
+      const y = sampleTerrainY(xM, zM, track, demGrid);
+      elevGrid[row * size + col] = y;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  const reliefSpan = Math.max(0, maxY - minY);
+  const contourInterval = reliefSpan >= 60 ? 10 : reliefSpan >= 20 ? 5 : 2.5;
+  const stepX = widthMeters / Math.max(1, size - 1);
+  const stepZ = depthMeters / Math.max(1, size - 1);
+
+  // NW directional sun vector
+  const lx = -0.62;
+  const ly = 0.62;
+  const lz = -0.48;
+
+  const isSatellite = normalized === 'satellite' || normalized === 'hybrid';
+  const isTerrain = normalized === 'terrain';
+  const isMono = normalized === 'monochrome';
+
+  for (let row = 0; row < size; row += 1) {
+    const vNorm = row / Math.max(1, size - 1);
+    const rPrev = Math.max(0, row - 1);
+    const rNext = Math.min(size - 1, row + 1);
+    for (let col = 0; col < size; col += 1) {
+      const uNorm = col / Math.max(1, size - 1);
+      const cPrev = Math.max(0, col - 1);
+      const cNext = Math.min(size - 1, col + 1);
+
+      const idx = (row * size + col) * 4;
+      const yCenter = elevGrid[row * size + col];
+      const dydx = (elevGrid[row * size + cNext] - elevGrid[row * size + cPrev]) / (stepX * (cNext - cPrev || 1));
+      const dydz = (elevGrid[rNext * size + col] - elevGrid[rPrev * size + col]) / (stepZ * (rNext - rPrev || 1));
+
+      // Surface normal (-dydx, 1, -dydz) normalized
+      const invLen = 1 / Math.hypot(dydx, 1, dydz);
+      const nx = -dydx * invLen;
+      const ny = 1 * invLen;
+      const nz = -dydz * invLen;
+      const ndotl = Math.max(-1, Math.min(1, nx * lx + ny * ly + nz * lz));
+
+      // Hillshade modulation vs neutral 0.62
+      const shadeDelta = ndotl - 0.62;
+      const slopeMag = Math.hypot(dydx, dydz);
+
+      let outR = 128;
+      let outG = 128;
+      let outB = 128;
+      let outA = 0;
+
+      if (reliefSpan >= 1.5 && slopeMag > 0.008) {
+        if (shadeDelta < 0) {
+          // Valley / leeward slope shadow
+          outR = isTerrain ? 32 : 15;
+          outG = isTerrain ? 41 : 23;
+          outB = isTerrain ? 52 : 42;
+          outA = Math.min(isSatellite ? 92 : 112, Math.round(Math.abs(shadeDelta) * (isTerrain ? 210 : 165)));
+        } else {
+          // Warm sunlit ridge catch
+          outR = 255;
+          outG = isTerrain ? 248 : 252;
+          outB = isTerrain ? 225 : 244;
+          outA = Math.min(68, Math.round(shadeDelta * (isTerrain ? 155 : 110)));
+        }
+      }
+
+      // Cartographic elevation contour lines
+      if (reliefSpan >= 2.5 && (isTerrain || isMono || !isSatellite)) {
+        const mod = (yCenter - minY) / contourInterval;
+        const frac = mod - Math.floor(mod);
+        const distToLine = Math.min(frac, 1 - frac);
+        const lineThreshold = isTerrain ? 0.065 : isMono ? 0.055 : 0.04;
+        if (distToLine < lineThreshold) {
+          const contourStrength = (1 - distToLine / lineThreshold) * (isTerrain ? 0.42 : isMono ? 0.34 : 0.16);
+          const contourA = Math.round(contourStrength * 255);
+          if (contourA > outA) {
+            outR = isTerrain ? 78 : 51;
+            outG = isTerrain ? 64 : 65;
+            outB = isTerrain ? 46 : 85;
+            outA = contourA;
+          }
+        }
+      }
+
+      // Subtle atmospheric horizon feather at extreme perimeter (outer 8%)
+      const edgeDist = Math.max(Math.abs(uNorm - 0.5) * 2, Math.abs(vNorm - 0.5) * 2);
+      if (edgeDist > 0.88) {
+        const fade = Math.min(1, (edgeDist - 0.88) / 0.12);
+        const edgeAlpha = Math.round(fade * fade * (isSatellite ? 60 : 45));
+        if (edgeAlpha > outA) {
+          outR = isSatellite ? 15 : 226;
+          outG = isSatellite ? 23 : 232;
+          outB = isSatellite ? 42 : 240;
+          outA = edgeAlpha;
+        }
+      }
+
+      rgba[idx] = outR;
+      rgba[idx + 1] = outG;
+      rgba[idx + 2] = outB;
+      rgba[idx + 3] = outA;
+    }
+  }
+
+  return rgba;
+}
+
+/**
+ * Generates a Three.js RGBA overlay DataTexture containing elevation hillshade and contour lines.
+ */
+export function createTerrainReliefOverlayTexture(
+  gridCenterX: number,
+  gridCenterZ: number,
+  widthMeters: number,
+  depthMeters: number,
+  track: Studio3DTrack,
+  demGrid: RealDemGrid | null,
+  style: MapStyle3D,
+  maxAnisotropy: number,
+): THREE.DataTexture {
+  const size = 192;
+  const rgba = computeTerrainReliefOverlayPixels(
+    size,
+    gridCenterX,
+    gridCenterZ,
+    widthMeters,
+    depthMeters,
+    track,
+    demGrid,
+    style,
+  );
+  const tex = new THREE.DataTexture(rgba, size, size, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = true;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Fetches real OSM highway/road vectors around the route and converts to local meters.
+ */
+export async function fetchOsmRoadsForTrack(
+  track: Studio3DTrack,
+  signal?: AbortSignal,
+): Promise<OsmRoadWay[]> {
+  const padLat = Math.max(0.003, (track.maxLat - track.minLat) * 0.3);
+  const padLon = Math.max(0.003, (track.maxLon - track.minLon) * 0.3);
+  const south = Math.max(-85, track.minLat - padLat);
+  const north = Math.min(85, track.maxLat + padLat);
+  const west = track.minLon - padLon;
+  const east = track.maxLon + padLon;
+
+  try {
+    const res = await fetch(
+      `/api/map-roads?south=${south.toFixed(5)}&west=${west.toFixed(5)}&north=${north.toFixed(5)}&east=${east.toFixed(5)}`,
+      { signal },
+    );
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      roads?: Array<{
+        id: string;
+        highway: string;
+        widthM: number;
+        geometry: Array<{ lat: number; lon: number }>;
+      }>;
+    };
+    if (!json.roads || json.roads.length === 0) return [];
+    return json.roads.map((r) => ({
+      id: r.id,
+      highway: r.highway,
+      widthM: r.widthM,
+      layer: 0,
+      points: r.geometry.map((pt) =>
+        latLonToLocalMeters(pt.lat, pt.lon, track.centerLat, track.centerLon),
+      ),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Prioritizes footprints nearest to the running route corridor so detailed landmarks around
+ * streets are always kept first even in dense downtown areas.
+ */
+export function prioritizeBuildingsNearRoute(
+  buildings: OsmBuildingFootprint[],
+  track: Studio3DTrack,
+  limit = 320,
+): OsmBuildingFootprint[] {
+  if (buildings.length <= 1) return buildings.slice(0, limit);
+  const pts = track.points;
+  const stride = Math.max(1, Math.floor(pts.length / 80));
+
+  const scored = buildings.map((b) => {
+    let cx = 0;
+    let cz = 0;
+    for (let i = 0; i < b.polygon.length; i += 1) {
+      cx += b.polygon[i].xM;
+      cz += b.polygon[i].zM;
+    }
+    cx /= Math.max(1, b.polygon.length);
+    cz /= Math.max(1, b.polygon.length);
+
+    let minDistSq = Infinity;
+    for (let i = 0; i < pts.length; i += stride) {
+      const dx = cx - pts[i].xM;
+      const dz = cz - pts[i].zM;
+      const dSq = dx * dx + dz * dz;
+      if (dSq < minDistSq) minDistSq = dSq;
+    }
+
+    return {
+      ...b,
+      distanceToRouteM: Math.sqrt(minDistSq),
+    };
+  });
+
+  scored.sort((a, b) => (a.distanceToRouteM ?? 0) - (b.distanceToRouteM ?? 0));
+  return scored.slice(0, limit);
+}
+
+/**
+ * Fetches real OSM 3D building footprints around the route, prioritized by proximity to corridor.
+ */
+export async function fetchOsmBuildingsForTrack(
+  track: Studio3DTrack,
+  signal?: AbortSignal,
+): Promise<OsmBuildingFootprint[]> {
+  const padLat = Math.max(0.0025, (track.maxLat - track.minLat) * 0.25);
+  const padLon = Math.max(0.0025, (track.maxLon - track.minLon) * 0.25);
+  const south = Math.max(-85, track.minLat - padLat);
+  const north = Math.min(85, track.maxLat + padLat);
+  const west = track.minLon - padLon;
+  const east = track.maxLon + padLon;
+
+  try {
+    const res = await fetch(
+      `/api/map-buildings?south=${south.toFixed(5)}&west=${west.toFixed(5)}&north=${north.toFixed(5)}&east=${east.toFixed(5)}`,
+      { signal },
+    );
+    if (res.ok) {
+      const json = (await res.json()) as {
+        buildings?: Array<{
+          id: string;
+          polygon: Array<{ lat: number; lon: number }>;
+          heightM: number;
+          levels?: number;
+        }>;
+      };
+      if (json.buildings && json.buildings.length > 0) {
+        const mapped: OsmBuildingFootprint[] = json.buildings.map((b) => ({
+          id: b.id,
+          heightM: b.heightM,
+          ...(b.levels ? { levels: b.levels } : {}),
+          polygon: b.polygon.map((pt) =>
+            latLonToLocalMeters(pt.lat, pt.lon, track.centerLat, track.centerLon),
+          ),
+        }));
+        return prioritizeBuildingsNearRoute(mapped, track, 320);
+      }
+    }
+  } catch {
+    // Return empty cleanly when offline or Overpass unavailable
+  }
+
+  return [];
+}
+
+/**
+ * Builds a single terrain-draped BufferGeometry representing real OSM road ways
+ * (1 GPU draw call, vertex-colored by road hierarchy).
+ */
+export function buildOsmRoadNetworkGeometry(
+  roads: OsmRoadWay[],
+  track: Studio3DTrack,
+  demGrid: RealDemGrid | null,
+  isNight: boolean,
+  style: MapStyle3D = 'standard',
+): THREE.BufferGeometry | null {
+  if (roads.length === 0) return null;
+
+  const isLiberty = normalizeMapStyle3D(style) === 'liberty';
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const colors: number[] = [];
+  const c = new THREE.Color();
+
+  for (let r = 0; r < roads.length; r += 1) {
+    const way = roads[r];
+    if (way.points.length < 2) continue;
+
+    const halfW = Math.max(1.0, way.widthM * 0.45);
+    const isHighway =
+      way.highway.startsWith('motorway') ||
+      way.highway.startsWith('trunk') ||
+      way.highway.startsWith('primary');
+    const isMajor = isHighway || way.highway.startsWith('secondary');
+    const isPath =
+      way.highway === 'footway' ||
+      way.highway === 'path' ||
+      way.highway === 'cycleway' ||
+      way.highway === 'pedestrian';
+
+    if (isNight) {
+      c.set(isMajor ? '#334155' : isPath ? '#1E293B' : '#273549');
+    } else if (isLiberty) {
+      // OpenFreeMap Liberty highway palette: warm amber trunks/primaries, crisp white streets
+      c.set(isHighway ? '#FCD673' : isMajor ? '#FEF3C7' : isPath ? '#ECE8DE' : '#FFFFFF');
+    } else {
+      c.set(isMajor ? '#FFFFFF' : isPath ? '#E2E8F0' : '#F1F5F9');
+    }
+
+    const liftY = isMajor ? 0.11 : isPath ? 0.06 : 0.085;
+
+    for (let i = 0; i < way.points.length - 1; i += 1) {
+      const a = way.points[i];
+      const b = way.points[i + 1];
+      const dx = b.xM - a.xM;
+      const dz = b.zM - a.zM;
+      const len = Math.hypot(dx, dz);
+      if (len < 0.25) continue;
+
+      const nx = (-dz / len) * halfW;
+      const nz = (dx / len) * halfW;
+
+      const ya = sampleTerrainY(a.xM, a.zM, track, demGrid) + liftY;
+      const yb = sampleTerrainY(b.xM, b.zM, track, demGrid) + liftY;
+
+      const ax0 = a.xM - nx;
+      const az0 = a.zM - nz;
+      const ax1 = a.xM + nx;
+      const az1 = a.zM + nz;
+
+      const bx0 = b.xM - nx;
+      const bz0 = b.zM - nz;
+      const bx1 = b.xM + nx;
+      const bz1 = b.zM + nz;
+
+      // Two triangles (a0, a1, b0) & (a1, b1, b0) facing +Y
+      positions.push(
+        ax0, ya, az0,
+        ax1, ya, az1,
+        bx0, yb, bz0,
+        ax1, ya, az1,
+        bx1, yb, bz1,
+        bx0, yb, bz0,
+      );
+      for (let k = 0; k < 6; k += 1) {
+        normals.push(0, 1, 0);
+        colors.push(c.r, c.g, c.b);
+      }
+    }
+  }
+
+  if (positions.length === 0) return null;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
+ * Extrudes and batches all real OSM building footprints into a single merged BufferGeometry
+ * (1 draw call) with subtle architectural tone variation by height & footprint ID.
+ */
+export function buildMergedOsmBuildingsGeometry(
+  buildings: OsmBuildingFootprint[],
+  track: Studio3DTrack,
+  demGrid: RealDemGrid | null,
+  isNight: boolean,
+  isEvening: boolean,
+  style: MapStyle3D = 'standard',
+): THREE.BufferGeometry | null {
+  if (buildings.length === 0) return null;
+
+  const isLiberty = normalizeMapStyle3D(style) === 'liberty';
+  const partGeos: THREE.BufferGeometry[] = [];
+  const paletteDay = isLiberty
+    ? ['#EDE8DF', '#E5DFD3', '#F3EFE7', '#DFD8CB']
+    : ['#E2E8F0', '#CBD5E1', '#F1F5F9', '#DCE4EE'];
+  const paletteEvening = ['#CBD5E1', '#B8C4D4', '#E2E8F0'];
+  const paletteNight = ['#1E293B', '#283548', '#172033'];
+  const palette = isNight ? paletteNight : isEvening ? paletteEvening : paletteDay;
+  const col = new THREE.Color();
+
+  for (let i = 0; i < buildings.length; i += 1) {
+    const b = buildings[i];
+    if (b.polygon.length < 3) continue;
+
+    let cx = 0;
+    let cz = 0;
+    for (let p = 0; p < b.polygon.length; p += 1) {
+      cx += b.polygon[p].xM;
+      cz += b.polygon[p].zM;
+    }
+    cx /= b.polygon.length;
+    cz /= b.polygon.length;
+
+    const shape = new THREE.Shape();
+    b.polygon.forEach((pt, idx) => {
+      const lx = pt.xM - cx;
+      const ly = -(pt.zM - cz);
+      if (idx === 0) shape.moveTo(lx, ly);
+      else shape.lineTo(lx, ly);
+    });
+    shape.closePath();
+
+    const rawGeo = new THREE.ExtrudeGeometry(shape, {
+      depth: b.heightM,
+      bevelEnabled: false,
+    });
+    rawGeo.rotateX(-Math.PI / 2);
+
+    const baseY = sampleTerrainY(cx, cz, track, demGrid) - 1.8;
+    rawGeo.translate(cx, baseY, cz);
+
+    const nonIdx = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo;
+    if (nonIdx !== rawGeo) rawGeo.dispose();
+
+    const posAttr = nonIdx.getAttribute('position');
+    if (!posAttr || posAttr.count === 0) {
+      nonIdx.dispose();
+      continue;
+    }
+
+    // Remove uv attribute if not needed so merge attributes match uniformly
+    if (nonIdx.getAttribute('uv')) nonIdx.deleteAttribute('uv');
+    if (!nonIdx.getAttribute('normal')) nonIdx.computeVertexNormals();
+
+    col.set(palette[i % palette.length]);
+    const colorArr = new Float32Array(posAttr.count * 3);
+    for (let v = 0; v < posAttr.count; v += 1) {
+      // Slight roof brighten compared to foundation for natural daylight readability
+      const relH = THREE.MathUtils.clamp((posAttr.getY(v) - baseY) / Math.max(4, b.heightM), 0, 1);
+      const shade = 0.88 + relH * 0.14;
+      colorArr[v * 3] = Math.min(1, col.r * shade);
+      colorArr[v * 3 + 1] = Math.min(1, col.g * shade);
+      colorArr[v * 3 + 2] = Math.min(1, col.b * shade);
+    }
+    nonIdx.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
+    partGeos.push(nonIdx);
+  }
+
+  if (partGeos.length === 0) return null;
+
+  const merged = mergeGeometries(partGeos, false);
+  for (const g of partGeos) g.dispose();
+  if (!merged) return null;
+
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+

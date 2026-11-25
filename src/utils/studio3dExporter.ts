@@ -23,9 +23,6 @@ export function getExportDurationSec(config: ExportConfig): number {
   return config.durationPreset;
 }
 
-/**
- * Samples interpolated telemetry along the 3D route for any normalized timeline progress (0..1).
- */
 export function sampleTrackTelemetryAtProgress(
   track: Studio3DTrack,
   rawProgress: number,
@@ -70,16 +67,12 @@ export function sampleTrackTelemetryAtProgress(
 }
 
 export interface StartFinishBannerState {
-  startAlpha: number; // 0..1
-  startOffsetY: number; // px offset at 720p scale
-  finishAlpha: number; // 0..1
-  finishOffsetY: number; // px offset at 720p scale
+  startAlpha: number;
+  startOffsetY: number;
+  finishAlpha: number;
+  finishOffsetY: number;
 }
 
-/**
- * Computes synchronized Start (0..14%) and Finish (finishThreshold..100%) animated banner states
- * shared identically by the 9:16 React phone preview and the 2D video export compositor.
- */
 export function computeStartFinishBannerState(
   rawProgress: number,
   includeFinishPose: boolean,
@@ -87,7 +80,6 @@ export function computeStartFinishBannerState(
   const p = Math.min(1, Math.max(0, rawProgress));
   const easeOutCubic = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
 
-  // Start banner: active from 0..0.14 (visible at t=0, slides/fades out smoothly 0.10..0.14)
   let startAlpha = 0;
   let startOffsetY = -14;
   if (p <= 0.14) {
@@ -101,7 +93,6 @@ export function computeStartFinishBannerState(
     startOffsetY = (1 - startAlpha) * -14;
   }
 
-  // Finish banner: enters cleanly on finish threshold
   const finishThreshold = includeFinishPose ? 0.88 : 0.94;
   let finishAlpha = 0;
   let finishOffsetY = 16;
@@ -149,10 +140,6 @@ export interface MiniMapGeometry {
   runnerPt: MiniMapPoint;
 }
 
-/**
- * Projects a GPS track into normalized 2D coordinates inside a square mini-map box,
- * preserving geographic aspect ratio and returning the live runner marker along routeProgress (0..1).
- */
 export function computeMiniMapGeometry(
   track: Studio3DTrack,
   routeProgress: number,
@@ -183,7 +170,6 @@ export function computeMiniMapGeometry(
     };
   };
 
-  // Downsample long tracks cleanly to <= 120 vertices for crisp SVG/Canvas rendering
   const step = Math.max(1, Math.floor(pts.length / 120));
   const polyline: MiniMapPoint[] = [];
   for (let i = 0; i < pts.length; i += step) {
@@ -207,9 +193,6 @@ export function computeMiniMapGeometry(
   };
 }
 
-/**
- * Draws the broadcast 9:16 HUD overlay onto the offscreen video compositor canvas.
- */
 function paintBroadcastHudOverlay(params: {
   ctx: CanvasRenderingContext2D;
   width: number;
@@ -225,7 +208,6 @@ function paintBroadcastHudOverlay(params: {
   const finishThreshold = includeFinishPose ? 0.88 : 1.0;
   const routeProgress = Math.min(1, Math.max(0, progress / finishThreshold));
 
-  // Top & bottom contrast scrims for crisp WCAG AA legibility
   const topGrad = ctx.createLinearGradient(0, 0, 0, 220 * s);
   topGrad.addColorStop(0, 'rgba(2, 6, 23, 0.84)');
   topGrad.addColorStop(0.65, 'rgba(2, 6, 23, 0.42)');
@@ -242,11 +224,10 @@ function paintBroadcastHudOverlay(params: {
 
   const padX = 36 * s;
 
-  // Top-left header card (leaves room for top-right GPS mini-map inset)
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(16, 185, 129, 0.95)';
   ctx.font = `700 ${Math.round(13 * s)}px JetBrains Mono, monospace`;
-  ctx.fillText(`SPORTBYTE · #${(runner.bibNumber || '001').slice(0, 8)}`, padX, 46 * s);
+  ctx.fillText(`SPORTBYTE 路 #${(runner.bibNumber || '001').slice(0, 8)}`, padX, 46 * s);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = `700 ${Math.round(26 * s)}px Outfit, sans-serif`;
@@ -255,12 +236,11 @@ function paintBroadcastHudOverlay(params: {
   ctx.fillStyle = 'rgba(226, 232, 240, 0.86)';
   ctx.font = `600 ${Math.round(15 * s)}px JetBrains Mono, monospace`;
   ctx.fillText(
-    `${track.date} · ${track.location.slice(0, 22)}`,
+    `${track.date} 路 ${track.location.slice(0, 22)}`,
     padX,
     104 * s,
   );
 
-  // Top-right GPS mini-map radar inset
   const mmSize = 114 * s;
   const mmX = width - padX - mmSize;
   const mmY = 30 * s;
@@ -289,13 +269,11 @@ function paintBroadcastHudOverlay(params: {
     ctx.lineJoin = 'round';
     ctx.stroke();
 
-    // Start marker
     ctx.beginPath();
     ctx.arc(mmX + mmGeom.startPt.x, mmY + mmGeom.startPt.y, 4 * s, 0, Math.PI * 2);
     ctx.fillStyle = '#10B981';
     ctx.fill();
 
-    // Active runner GPS marker
     ctx.beginPath();
     ctx.arc(mmX + mmGeom.runnerPt.x, mmY + mmGeom.runnerPt.y, 5.5 * s, 0, Math.PI * 2);
     ctx.fillStyle = '#FFFFFF';
@@ -306,7 +284,6 @@ function paintBroadcastHudOverlay(params: {
     ctx.restore();
   }
 
-  // Animated Start & Finish Popup Overlay Banners (positioned clear below header & GPS inset)
   const banner = computeStartFinishBannerState(progress, includeFinishPose);
 
   if (banner.startAlpha > 0.02) {
@@ -324,7 +301,6 @@ function paintBroadcastHudOverlay(params: {
     ctx.lineWidth = Math.max(1.5, 2 * s);
     ctx.stroke();
 
-    // START badge
     drawRoundedRect(ctx, bx + 18 * s, by + 20 * s, 96 * s, 48 * s, 12 * s);
     ctx.fillStyle = '#10B981';
     ctx.fill();
@@ -338,7 +314,7 @@ function paintBroadcastHudOverlay(params: {
     ctx.fillStyle = '#FFFFFF';
     ctx.font = `700 ${Math.round(21 * s)}px Outfit, sans-serif`;
     ctx.fillText(
-      `${track.totalDistanceKm.toFixed(2)} KM · ${track.location.slice(0, 22)}`,
+      `${track.totalDistanceKm.toFixed(2)} KM 路 ${track.location.slice(0, 22)}`,
       bx + 132 * s,
       by + 42 * s,
     );
@@ -367,7 +343,6 @@ function paintBroadcastHudOverlay(params: {
     ctx.lineWidth = Math.max(1.5, 2 * s);
     ctx.stroke();
 
-    // FINISH badge
     drawRoundedRect(ctx, bx + 18 * s, by + 26 * s, 108 * s, 52 * s, 12 * s);
     ctx.fillStyle = '#F97316';
     ctx.fill();
@@ -381,21 +356,20 @@ function paintBroadcastHudOverlay(params: {
     ctx.fillStyle = '#FFFFFF';
     ctx.font = `700 ${Math.round(21 * s)}px Outfit, sans-serif`;
     ctx.fillText(
-      `${(runner.runnerName || 'Pelari').slice(0, 22)} · #${runner.bibNumber || '001'}`,
+      `${(runner.runnerName || 'Pelari').slice(0, 22)} 路 #${runner.bibNumber || '001'}`,
       bx + 142 * s,
       by + 44 * s,
     );
     ctx.fillStyle = '#FDE68A';
     ctx.font = `700 ${Math.round(16 * s)}px JetBrains Mono, monospace`;
     ctx.fillText(
-      `${track.totalDistanceKm.toFixed(2)} km · ${formatDuration(track.totalDurationSec)} · ${formatPace(track.avgPaceSecPerKm)}/km`,
+      `${track.totalDistanceKm.toFixed(2)} km 路 ${formatDuration(track.totalDurationSec)} 路 ${formatPace(track.avgPaceSecPerKm)}/km`,
       bx + 142 * s,
       by + 74 * s,
     );
     ctx.restore();
   }
 
-  // Bottom HUD Card (clean surface without backdrop blur, matching screenshot)
   const cardX = padX;
   const cardW = width - padX * 2;
   const cardH = 248 * s;
@@ -408,7 +382,6 @@ function paintBroadcastHudOverlay(params: {
   ctx.lineWidth = Math.max(1, 1.5 * s);
   ctx.stroke();
 
-  // Headline live distance / total KM + elapsed time or FINISH!
   const distStr = telemetry.distanceKm.toFixed(2);
   ctx.textAlign = 'left';
   ctx.fillStyle = '#FFFFFF';
@@ -424,13 +397,12 @@ function paintBroadcastHudOverlay(params: {
   ctx.fillStyle = telemetry.isFinishPhase ? '#34D399' : '#E2E8F0';
   ctx.font = `700 ${Math.round(18 * s)}px JetBrains Mono, monospace`;
   ctx.fillText(
-    telemetry.isFinishPhase ? `FINISH · ${formatDuration(telemetry.elapsedSec)}` : formatDuration(telemetry.elapsedSec),
+    telemetry.isFinishPhase ? `FINISH 路 ${formatDuration(telemetry.elapsedSec)}` : formatDuration(telemetry.elapsedSec),
     cardX + cardW - 24 * s,
     cardY + 45 * s,
   );
   ctx.textAlign = 'left';
 
-  // Progress bar directly under headline distance
   const barX = cardX + 24 * s;
   const barW = cardW - 48 * s;
   const barY = cardY + 62 * s;
@@ -442,7 +414,6 @@ function paintBroadcastHudOverlay(params: {
   ctx.fillStyle = runner.jerseyColor;
   ctx.fill();
 
-  // 6 Live Metrics in clean 3x2 tabular grid
   const stats = [
     { label: 'PACE (/KM)', value: `${formatPace(telemetry.point.paceSecPerKm)} /km` },
     { label: 'HEART RATE', value: `${telemetry.point.hr} bpm` },
@@ -493,6 +464,7 @@ export function pickSupportedVideoMimeType(): {
 
 export interface ExportVideoCallbacks {
   getSourceCanvas: () => HTMLCanvasElement | null;
+  getMapCanvas?: () => HTMLCanvasElement | null;
   setProgress: (nextProgress: number) => void;
   audioEngine: Studio3DAudioEngine;
   track: Studio3DTrack;
@@ -502,12 +474,9 @@ export interface ExportVideoCallbacks {
   abortSignal: AbortSignal;
 }
 
-/**
- * Records a clean vertical 9:16 video (720x1280 or 1080x1920 at 30fps) combining
- * the live WebGL scene, broadcast HUD overlay, "Sportbyte" watermark, and Web Audio soundtrack.
- */
 export async function recordStudio3DVideo({
   getSourceCanvas,
+  getMapCanvas,
   setProgress,
   audioEngine,
   track,
@@ -537,7 +506,6 @@ export async function recordStudio3DVideo({
     throw new Error('Gagal menginisialisasi kanvas kompositor 2D.');
   }
 
-  // Configure and start Web Audio soundtrack synced with recording start
   await audioEngine.configure(
     exportConfig.musicPreset,
     exportConfig.customAudioUrl,
@@ -596,13 +564,21 @@ export async function recordStudio3DVideo({
       setProgress(p);
       onPercent(Math.round(p * 100));
 
+      ctx.clearRect(0, 0, width, height);
+
+      const liveMapCanvas = getMapCanvas?.();
+      if (liveMapCanvas) {
+        const mScale = Math.max(width / liveMapCanvas.width, height / liveMapCanvas.height);
+        const mw = liveMapCanvas.width * mScale;
+        const mh = liveMapCanvas.height * mScale;
+        ctx.drawImage(liveMapCanvas, (width - mw) / 2, (height - mh) / 2, mw, mh);
+      }
+
       const liveCanvas = getSourceCanvas();
       if (liveCanvas) {
-        // Cover-fit WebGL source canvas into exact 9:16 export frame
         const scale = Math.max(width / liveCanvas.width, height / liveCanvas.height);
         const dw = liveCanvas.width * scale;
         const dh = liveCanvas.height * scale;
-        ctx.clearRect(0, 0, width, height);
         ctx.drawImage(liveCanvas, (width - dw) / 2, (height - dh) / 2, dw, dh);
       }
 

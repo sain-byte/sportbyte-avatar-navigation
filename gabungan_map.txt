@@ -1,0 +1,4421 @@
+==================== package.json ====================
+{
+  "name": "sportbyte-3d",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.8.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/three": "^0.187.0",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.8.0",
+    "vite": "^6.2.0"
+  }
+}
+
+
+==================== src/types/studio3d.ts ====================
+export type RunnerGender = 'male' | 'female';
+export type RunnerHairStyle = 'undercut' | 'spiky' | 'side-fade';
+export type RunnerAccessory = 'none' | 'cap' | 'headband' | 'visor' | 'trail-vest';
+export type CharacterStyle3D = 'chibi' | 'realistic' | 'custom-glb';
+export type CharacterSize3D = 'small' | 'medium' | 'large';
+export type GaitMode3D = 'auto' | 'walk' | 'jog' | 'run' | 'sprint';
+export type FinishPoseStyle3D = 'celebrate-jump' | 'exhausted-bow' | 'victory-raise';
+export type CustomModelAnimMode = 'auto' | 'bones' | 'clip';
+
+export interface RunnerConfig {
+  characterStyle: CharacterStyle3D;
+  characterSize: CharacterSize3D;
+  gaitMode: GaitMode3D;
+  finishPoseStyle: FinishPoseStyle3D;
+  customModelUrl: string | null;
+  customModelName: string | null;
+  customModelFlip180: boolean;
+  customModelAnimMode: CustomModelAnimMode;
+  runnerName: string;
+  bibNumber: string;
+  gender: RunnerGender;
+  glasses: boolean;
+  hairStyle: RunnerHairStyle;
+  accessory: RunnerAccessory;
+  jerseyColor: string;
+  shortsColor: string;
+  shoesColor: string;
+}
+
+export interface MapLoadStatus {
+  phase: 'loading' | 'ready' | 'partial' | 'error';
+  loadedTiles: number;
+  failedTiles: number;
+  totalTiles: number;
+  zoom: number;
+}
+
+export type CameraMode3D =
+  | 'auto'
+  | 'follow-chase'
+  | 'drone'
+  | 'drone-180'
+  | 'follow-20m'
+  | 'birds-eye'
+  | 'overview'
+  | 'finish-pose';
+export type Camera20mAngle = 'front' | 'back' | 'side' | 'orbit';
+export type CanonicalMapStyle3D =
+  | 'standard'
+  | 'liberty'
+  | 'satellite'
+  | 'terrain'
+  | 'monochrome'
+  | 'hybrid'
+  | 'city3d';
+export type MapStyle3D =
+  | CanonicalMapStyle3D
+  | 'openfreemap'
+  | 'voyager'
+  | 'topo'
+  | 'street'
+  | 'night';
+export type LightingMood3D =
+  | 'auto'
+  | 'morning'
+  | 'evening'
+  | 'night'
+  | 'city-park'
+  | 'mountain'
+  | 'night-run';
+
+export type RouteVisualStyle3D =
+  | 'google-maps'
+  | 'sportbyte-lime'
+  | 'google-pace'
+  | 'sport-jersey'
+  | 'minimal-clean';
+export type RouteSnapMode3D = 'raw' | 'snap-road';
+
+export interface MapConfig {
+  cameraMode: CameraMode3D;
+  camera20mAngle: Camera20mAngle;
+  cameraZoom: number; // 0.5..2.5 multiplier (1.0 = calibrated default)
+  mapStyle: MapStyle3D;
+  buildings3d: boolean;
+  overlayRelief?: boolean; // Three.js elevation contour + hillshade overlay texture
+  overlaySurface?: boolean; // Three.js PBR surface micro-detail bump/roughness overlay
+  overlayLabels?: boolean; // Three.js street/reference label overlay texture
+  lightingMood: LightingMood3D;
+  routeStyle?: RouteVisualStyle3D;
+  routeSnapMode?: RouteSnapMode3D;
+}
+
+export type DurationPresetSec = 15 | 30 | 45 | 60 | 'custom';
+export type MusicPreset3D = 'none' | 'upbeat-synth' | 'lofi-stride' | 'epic-trail' | 'custom-mp3';
+export type VideoQuality3D = '720p' | '1080p';
+
+export interface ExportConfig {
+  durationPreset: DurationPresetSec;
+  customDurationSec: number;
+  includeFinishPose: boolean;
+  musicPreset: MusicPreset3D;
+  customAudioUrl: string | null;
+  customAudioName: string | null;
+  volume: number; // 0..1
+  quality: VideoQuality3D;
+}
+
+export interface Studio3DTrackPoint {
+  lat: number;
+  lon: number;
+  xM: number; // East-West meters relative to center
+  zM: number; // North-South meters relative to center (North = negative Z in Three.js)
+  elevationM: number;
+  elapsedSec: number;
+  distanceKm: number;
+  paceSecPerKm: number;
+  hr: number;
+  cadence: number;
+}
+
+export type LandmarkType3D = 'start' | 'finish' | 'peak' | 'km' | 'custom';
+
+export interface Studio3DLandmark {
+  id: string;
+  label: string;
+  type: LandmarkType3D;
+  progress: number; // 0..1 along route
+  distanceKm: number;
+  elevationM: number;
+}
+
+export interface Studio3DTrack {
+  id: string;
+  title: string;
+  date: string;
+  location: string;
+  source: 'fit' | 'gpx' | 'sample' | 'history';
+  points: Studio3DTrackPoint[];
+  totalDistanceKm: number;
+  totalDurationSec: number;
+  avgPaceSecPerKm: number;
+  avgHr: number;
+  avgCadence: number;
+  elevationGainM: number;
+  minElevationM: number;
+  maxElevationM: number;
+  centerLat: number;
+  centerLon: number;
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+  spanMeters: number;
+  landmarks: Studio3DLandmark[];
+}
+
+export interface OsmBuildingFootprint {
+  id: string;
+  polygon: Array<{ xM: number; zM: number }>;
+  heightM: number;
+  levels?: number;
+  distanceToRouteM?: number;
+}
+
+export interface OsmRoadWay {
+  id: string;
+  highway: string;
+  widthM: number;
+  layer?: number;
+  points: Array<{ xM: number; zM: number }>;
+}
+
+export function normalizeMapStyle3D(style: MapStyle3D): CanonicalMapStyle3D {
+  if (style === 'openfreemap') return 'liberty';
+  if (style === 'voyager' || style === 'street') return 'standard';
+  if (style === 'topo') return 'terrain';
+  if (style === 'night') return 'city3d';
+  return style;
+}
+
+export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
+  characterStyle: 'chibi',
+  characterSize: 'medium',
+  gaitMode: 'auto',
+  finishPoseStyle: 'celebrate-jump',
+  customModelUrl: null,
+  customModelName: null,
+  customModelFlip180: false,
+  customModelAnimMode: 'auto',
+  runnerName: 'Pelari Nusantara',
+  bibNumber: '2026',
+  gender: 'male',
+  glasses: false,
+  hairStyle: 'undercut',
+  accessory: 'cap',
+  jerseyColor: '#F97316',
+  shortsColor: '#0F172A',
+  shoesColor: '#38BDF8',
+};
+
+export const DEFAULT_MAP_CONFIG: MapConfig = {
+  cameraMode: 'auto',
+  camera20mAngle: 'back',
+  cameraZoom: 1.0,
+  mapStyle: 'standard',
+  buildings3d: true,
+  overlayRelief: true,
+  overlaySurface: true,
+  overlayLabels: true,
+  lightingMood: 'auto',
+  routeStyle: 'google-maps',
+  routeSnapMode: 'raw',
+};
+
+export const DEFAULT_EXPORT_CONFIG: ExportConfig = {
+  durationPreset: 30,
+  customDurationSec: 25,
+  includeFinishPose: true,
+  musicPreset: 'upbeat-synth',
+  customAudioUrl: null,
+  customAudioName: null,
+  volume: 0.65,
+  quality: '720p',
+};
+
+
+==================== src/components/studio3d/Studio3DPanelTabs.tsx ====================
+import React, { useRef, useState } from 'react';
+import {
+  Box,
+  Check,
+  Download,
+  Film,
+  Map as MapIcon,
+  MapPin,
+  Music,
+  Plus,
+  RefreshCw,
+  Save,
+  Sparkles,
+  Trash2,
+  Upload,
+  User,
+  Volume2,
+  X,
+} from 'lucide-react';
+import {
+  normalizeMapStyle3D,
+  type CanonicalMapStyle3D,
+  type CharacterStyle3D,
+  type CustomModelAnimMode,
+  type DurationPresetSec,
+  type ExportConfig,
+  type FinishPoseStyle3D,
+  type GaitMode3D,
+  type LightingMood3D,
+  type MapConfig,
+  type MapLoadStatus,
+  type MusicPreset3D,
+  type RouteSnapMode3D,
+  type RouteVisualStyle3D,
+  type RunnerAccessory,
+  type RunnerConfig,
+  type RunnerGender,
+  type RunnerHairStyle,
+  type Studio3DTrack,
+  type VideoQuality3D,
+} from '../../types/studio3d';
+import {
+  formatAvatarSizeMb,
+  type SavedGlbAvatarSummary,
+} from '../../utils/studio3dAvatarStorage';
+import { getExportDurationSec } from '../../utils/studio3dExporter';
+import type { CustomGlbStatus } from './CustomGlbRunner3D';
+
+export type Studio3DTab = 'pelari' | 'peta' | 'export';
+
+interface Studio3DPanelTabsProps {
+  activeTab: Studio3DTab;
+  onChangeTab: (tab: Studio3DTab) => void;
+  runner: RunnerConfig;
+  onChangeRunner: (next: RunnerConfig) => void;
+  customModelStatus: CustomGlbStatus;
+  savedAvatars: SavedGlbAvatarSummary[];
+  activeSavedAvatarId: string | null;
+  avatarStorageNotice: string | null;
+  onSelectGlbFile: (file: File, replaceSavedId?: string) => void;
+  onSaveCurrentGlbAvatar: () => void;
+  onLoadSavedGlbAvatar: (id: string) => void;
+  onDeleteSavedGlbAvatar: (id: string) => void;
+  onClearGlbModel: () => void;
+  mapConfig: MapConfig;
+  onChangeMapConfig: (next: MapConfig) => void;
+  mapLoadStatus: MapLoadStatus;
+  routeSnapStatus?: 'idle' | 'matching' | 'matched' | 'fallback';
+  onReloadMap: () => void;
+  exportConfig: ExportConfig;
+  onChangeExportConfig: (next: ExportConfig) => void;
+  track: Studio3DTrack | null;
+  onUpdateTrackInfo: (patch: Partial<Pick<Studio3DTrack, 'title' | 'date' | 'location'>>) => void;
+  onAddCustomLandmark: (label: string, progress: number) => void;
+  onRemoveLandmark: (id: string) => void;
+  isExporting: boolean;
+  exportPercent: number;
+  exportError: string | null;
+  lastExportInfo: { filename: string; sizeMb: string } | null;
+  onStartExport: () => void;
+  onCancelExport: () => void;
+}
+
+const FINISH_POSE_OPTIONS: Array<{
+  id: FinishPoseStyle3D;
+  label: string;
+  desc: string;
+}> = [
+  { id: 'celebrate-jump', label: 'Selebrasi Lompat', desc: 'Lompat ceria & konfeti' },
+  { id: 'exhausted-bow', label: 'Menunduk Kelelahan', desc: 'Tangan di lutut terengah' },
+  { id: 'victory-raise', label: 'Angkat Tangan', desc: 'Tangan V kemenangan' },
+];
+
+const GAIT_OPTIONS: Array<{ id: GaitMode3D; label: string; desc: string }> = [
+  { id: 'auto', label: 'Auto', desc: 'Ikut pace' },
+  { id: 'walk', label: 'Jalan', desc: 'Santai' },
+  { id: 'jog', label: 'Jog', desc: 'Sedang' },
+  { id: 'run', label: 'Lari', desc: 'Penuh' },
+  { id: 'sprint', label: 'Sprint', desc: 'Cepat' },
+];
+
+const GLB_ANIM_OPTIONS: Array<{ id: CustomModelAnimMode; label: string }> = [
+  { id: 'auto', label: 'Auto (52 Tulang)' },
+  { id: 'bones', label: '52 Tulang Penuh' },
+  { id: 'clip', label: 'Klip Bawaan' },
+];
+
+const JERSEY_SWATCHES = ['#F97316', '#EF4444', '#2563EB', '#10B981', '#8B5CF6', '#EC4899', '#F59E0B', '#0F172A'];
+const SHORTS_SWATCHES = ['#0F172A', '#1E293B', '#334155', '#1D4ED8', '#065F46', '#7C2D12', '#F8FAFC'];
+const SHOE_SWATCHES = ['#38BDF8', '#F97316', '#A3E635', '#F43F5E', '#FACC15', '#FFFFFF', '#0F172A'];
+
+export const Studio3DPanelTabs: React.FC<Studio3DPanelTabsProps> = ({
+  activeTab,
+  onChangeTab,
+  runner,
+  onChangeRunner,
+  customModelStatus,
+  savedAvatars,
+  activeSavedAvatarId,
+  avatarStorageNotice,
+  onSelectGlbFile,
+  onSaveCurrentGlbAvatar,
+  onLoadSavedGlbAvatar,
+  onDeleteSavedGlbAvatar,
+  onClearGlbModel,
+  mapConfig,
+  onChangeMapConfig,
+  mapLoadStatus,
+  routeSnapStatus = 'idle',
+  onReloadMap,
+  exportConfig,
+  onChangeExportConfig,
+  track,
+  onUpdateTrackInfo,
+  onAddCustomLandmark,
+  onRemoveLandmark,
+  isExporting,
+  exportPercent,
+  exportError,
+  lastExportInfo,
+  onStartExport,
+  onCancelExport,
+}) => {
+  const [newLandmarkLabel, setNewLandmarkLabel] = useState('');
+  const [newLandmarkPct, setNewLandmarkPct] = useState(50);
+  const mp3InputRef = useRef<HTMLInputElement>(null);
+  const glbInputRef = useRef<HTMLInputElement>(null);
+  const pendingReplaceIdRef = useRef<string | undefined>(undefined);
+
+  const visibleLandmarks = (track?.landmarks ?? []).filter(
+    (lm) => lm.type !== 'start' && lm.type !== 'finish',
+  );
+
+  const activeSavedSummary = savedAvatars.find((a) => a.id === activeSavedAvatarId) ?? null;
+  const isSavedUpToDate = Boolean(
+    activeSavedSummary &&
+      activeSavedSummary.flip180 === Boolean(runner.customModelFlip180) &&
+      activeSavedSummary.animMode === (runner.customModelAnimMode ?? 'auto'),
+  );
+
+  const tabs: Array<{ id: Studio3DTab; label: string; icon: React.ReactNode }> = [
+    { id: 'pelari', label: 'Pelari', icon: <User className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'peta', label: 'Peta & Info', icon: <MapIcon className="w-3.5 h-3.5" aria-hidden="true" /> },
+    { id: 'export', label: 'Export 9:16', icon: <Film className="w-3.5 h-3.5" aria-hidden="true" /> },
+  ];
+
+  const triggerGlbPicker = (replaceSavedId?: string) => {
+    pendingReplaceIdRef.current = replaceSavedId;
+    glbInputRef.current?.click();
+  };
+
+  const handleGlbUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const targetReplaceId = pendingReplaceIdRef.current;
+    pendingReplaceIdRef.current = undefined;
+    e.target.value = '';
+    if (!file) return;
+    onSelectGlbFile(file, targetReplaceId);
+  };
+
+  const handleMp3Upload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (exportConfig.customAudioUrl && exportConfig.customAudioUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(exportConfig.customAudioUrl);
+    }
+    const url = URL.createObjectURL(file);
+    onChangeExportConfig({
+      ...exportConfig,
+      musicPreset: 'custom-mp3',
+      customAudioUrl: url,
+      customAudioName: file.name,
+    });
+    e.target.value = '';
+  };
+
+  const isMapLoading = mapLoadStatus.phase === 'loading';
+  const mapStatusText = isMapLoading
+    ? `Memuat tile peta z${mapLoadStatus.zoom} (${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles})`
+    : mapLoadStatus.phase === 'ready'
+      ? `Peta asli z${mapLoadStatus.zoom} siap (${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} tile)`
+      : mapLoadStatus.phase === 'partial'
+        ? `${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} tile dimuat (${mapLoadStatus.failedTiles} gagal)`
+        : 'Gagal memuat tile peta';
+
+  return (
+    <div
+      data-testid="studio3d-menu-panel"
+      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs"
+    >
+      {/* Clean Horizontal Menu Tabs */}
+      <div
+        role="tablist"
+        aria-label="Pengaturan Studio 3D"
+        className="flex items-center border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/60 px-3 sm:px-5 pt-2 gap-1"
+      >
+        {tabs.map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              data-testid={`studio3d-tab-${tab.id}`}
+              onClick={() => onChangeTab(tab.id)}
+              className={`h-10 px-4 rounded-t-xl text-xs font-semibold inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                active
+                  ? 'border-blue-600 text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-900'
+                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              {tab.icon}
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab Content Area - Flat 3-Column Grid (no nested cards or trapped scrollbox) */}
+      <div className="p-4 sm:p-6">
+        {activeTab === 'pelari' && (
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            data-testid="studio3d-panel-pelari"
+          >
+            {/* Kolom 1: Model 3D, Gaya Gerak & Pose Finish */}
+            <section className="space-y-4">
+              <div className="space-y-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <Box className="w-3.5 h-3.5" aria-hidden="true" />
+                  Karakter 3D
+                </h3>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      { id: 'chibi', label: 'Chibi Sporty' },
+                      { id: 'realistic', label: 'Atlet Realistis' },
+                      { id: 'custom-glb', label: 'Upload .GLB' },
+                    ] as Array<{ id: CharacterStyle3D; label: string }>
+                  ).map((cs) => (
+                    <button
+                      key={cs.id}
+                      type="button"
+                      data-testid={`studio3d-char-${cs.id}`}
+                      onClick={() => onChangeRunner({ ...runner, characterStyle: cs.id })}
+                      className={`h-9 px-2 rounded-lg border text-[11px] font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                        runner.characterStyle === cs.id
+                          ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {cs.label}
+                    </button>
+                  ))}
+                </div>
+
+                {runner.characterStyle === 'custom-glb' && (
+                  <div className="pt-2 space-y-2.5 border-t border-slate-100 dark:border-slate-800">
+                    <input
+                      ref={glbInputRef}
+                      type="file"
+                      accept=".glb,.gltf"
+                      className="hidden"
+                      data-testid="studio3d-glb-input"
+                      onChange={handleGlbUpload}
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="studio3d-glb-upload-btn"
+                        onClick={() => triggerGlbPicker(undefined)}
+                        className="flex-1 h-9 px-3 rounded-lg bg-slate-900 dark:bg-blue-600 hover:opacity-90 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        <span className="truncate">
+                          {runner.customModelName || 'Pilih File .GLB / .GLTF'}
+                        </span>
+                      </button>
+                      {runner.customModelUrl && (
+                        <button
+                          type="button"
+                          onClick={onClearGlbModel}
+                          aria-label="Hapus model 3D kustom"
+                          className="h-9 px-2.5 rounded-lg border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+
+                    {runner.customModelUrl && (
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          data-testid="studio3d-glb-replace-btn"
+                          onClick={() => triggerGlbPicker(activeSavedAvatarId ?? undefined)}
+                          className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                        >
+                          <RefreshCw className="w-3 h-3 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                          <span>Ganti .GLB</span>
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="studio3d-glb-save-btn"
+                          onClick={onSaveCurrentGlbAvatar}
+                          className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
+                            isSavedUpToDate
+                              ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                              : 'border-blue-600 bg-blue-600 hover:bg-blue-700 text-white'
+                          }`}
+                        >
+                          {isSavedUpToDate ? (
+                            <>
+                              <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>Tersimpan</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-3 h-3" aria-hidden="true" />
+                              <span>{activeSavedSummary ? 'Perbarui Simpanan' : 'Simpan Avatar'}</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                    {avatarStorageNotice && (
+                      <p
+                        data-testid="studio3d-glb-notice"
+                        className="text-[11px] font-medium text-blue-600 dark:text-blue-400"
+                      >
+                        {avatarStorageNotice}
+                      </p>
+                    )}
+
+                    {!runner.customModelUrl && (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Mendukung karakter <strong>.GLB / .GLTF</strong> (Mixamo, ReadyPlayerMe, Blender Rigify). Anda bisa simpan avatar agar otomatis termuat ulang.
+                      </p>
+                    )}
+                    {runner.customModelUrl && customModelStatus.loading && (
+                      <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
+                        Memuat model 3D ke kanvas...
+                      </p>
+                    )}
+                    {runner.customModelUrl && !customModelStatus.loading && !customModelStatus.error && (
+                      <div className="space-y-2">
+                        <p
+                          data-testid="studio3d-glb-status"
+                          className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium"
+                        >
+                          {customModelStatus.rigMode === 'clip'
+                            ? `Klip animasi aktif (${customModelStatus.animationCount} klip) · ${customModelStatus.detectedBones} tulang`
+                            : customModelStatus.rigMode === 'bones'
+                              ? `Skeleton ${customModelStatus.detectedBones}/${customModelStatus.totalSkeletonBones ?? customModelStatus.detectedBones} tulang aktif · Lari & Pose Finish`
+                              : 'Gerak langkah prosedural aktif'}
+                        </p>
+
+                        <div className="space-y-1">
+                          <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Mode Animasi .GLB
+                          </span>
+                          <div className="grid grid-cols-3 gap-1">
+                            {GLB_ANIM_OPTIONS.map((opt) => {
+                              const disabled =
+                                (opt.id === 'clip' && customModelStatus.animationCount === 0) ||
+                                (opt.id === 'bones' && customModelStatus.detectedBones === 0);
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  disabled={disabled}
+                                  data-testid={`studio3d-glb-anim-${opt.id}`}
+                                  onClick={() =>
+                                    onChangeRunner({ ...runner, customModelAnimMode: opt.id })
+                                  }
+                                  className={`h-7 px-1.5 rounded-md border text-[10px] font-semibold whitespace-nowrap transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                    (runner.customModelAnimMode ?? 'auto') === opt.id
+                                      ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <label className="flex items-center justify-between py-1 cursor-pointer">
+                          <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                            Putar Arah Model 180°
+                          </span>
+                          <input
+                            type="checkbox"
+                            data-testid="studio3d-glb-flip180"
+                            checked={Boolean(runner.customModelFlip180)}
+                            onChange={(e) =>
+                              onChangeRunner({ ...runner, customModelFlip180: e.target.checked })
+                            }
+                            className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
+                          />
+                        </label>
+                      </div>
+                    )}
+                    {customModelStatus.error && (
+                      <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                        {customModelStatus.error}
+                      </p>
+                    )}
+
+                    {/* Saved GLB Avatars List */}
+                    {savedAvatars.length > 0 && (
+                      <div
+                        data-testid="studio3d-glb-saved-list"
+                        className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5"
+                      >
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Avatar Tersimpan ({savedAvatars.length})
+                        </span>
+                        <div className="space-y-1">
+                          {savedAvatars.map((av) => {
+                            const isActive = av.id === activeSavedAvatarId;
+                            return (
+                              <div
+                                key={av.id}
+                                className={`flex items-center justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-[11px] ${
+                                  isActive
+                                    ? 'border-blue-300 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/30'
+                                    : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  data-testid={`studio3d-glb-load-${av.id}`}
+                                  onClick={() => onLoadSavedGlbAvatar(av.id)}
+                                  className="min-w-0 flex-1 text-left cursor-pointer"
+                                  title={`Muat avatar ${av.name}`}
+                                >
+                                  <span className="block font-semibold text-slate-800 dark:text-slate-100 truncate">
+                                    {av.name}
+                                  </span>
+                                  <span className="block font-mono-tabular text-[10px] text-slate-500 dark:text-slate-400">
+                                    {formatAvatarSizeMb(av.sizeBytes)}
+                                    {isActive ? ' · Aktif' : ''}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`studio3d-glb-replace-saved-${av.id}`}
+                                  onClick={() => triggerGlbPicker(av.id)}
+                                  aria-label={`Ganti file ${av.name}`}
+                                  className="h-6 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-[10px] font-semibold text-slate-700 dark:text-slate-200 shrink-0 cursor-pointer"
+                                >
+                                  Ganti
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`studio3d-glb-delete-saved-${av.id}`}
+                                  onClick={() => onDeleteSavedGlbAvatar(av.id)}
+                                  aria-label={`Hapus avatar ${av.name}`}
+                                  className="h-6 px-1.5 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 shrink-0 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Gaya Gerak */}
+              <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Gaya Gerak
+                </span>
+                <div className="grid grid-cols-5 gap-1">
+                  {GAIT_OPTIONS.map((gm) => (
+                    <button
+                      key={gm.id}
+                      type="button"
+                      data-testid={`studio3d-gait-${gm.id}`}
+                      onClick={() => onChangeRunner({ ...runner, gaitMode: gm.id })}
+                      className={`py-1.5 px-1 rounded-lg border text-center transition-colors cursor-pointer ${
+                        (runner.gaitMode ?? 'auto') === gm.id
+                          ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="block text-[11px] font-semibold">{gm.label}</span>
+                      <span className="block text-[9px] opacity-75">{gm.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Gaya Pose Finish */}
+              <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Pose Finish
+                </span>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {FINISH_POSE_OPTIONS.map((pose) => (
+                    <button
+                      key={pose.id}
+                      type="button"
+                      data-testid={`studio3d-pose-${pose.id}`}
+                      onClick={() => onChangeRunner({ ...runner, finishPoseStyle: pose.id })}
+                      className={`px-3 py-1.5 rounded-lg border text-left transition-colors cursor-pointer flex items-center justify-between ${
+                        runner.finishPoseStyle === pose.id
+                          ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="text-xs font-semibold">{pose.label}</span>
+                      <span className="text-[10px] opacity-80">{pose.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {/* Kolom 2: Identitas, Gender & Aksesori */}
+            <section className="space-y-4 md:border-l md:border-slate-100 md:dark:border-slate-800 md:pl-6">
+              <div className="space-y-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Identitas &amp; Nomor BIB
+                </h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-300 mb-1">
+                      Nama Pelari
+                    </label>
+                    <input
+                      type="text"
+                      value={runner.runnerName}
+                      maxLength={28}
+                      onChange={(e) => onChangeRunner({ ...runner, runnerName: e.target.value })}
+                      className="w-full h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Nama pelari..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-300 mb-1">
+                      No. BIB
+                    </label>
+                    <input
+                      type="text"
+                      value={runner.bibNumber}
+                      maxLength={6}
+                      onChange={(e) =>
+                        onChangeRunner({ ...runner, bibNumber: e.target.value.toUpperCase() })
+                      }
+                      className="w-full h-9 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono-tabular text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="2026"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {runner.characterStyle === 'custom-glb' ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  Model <strong className="font-mono-tabular">.GLB / .GLTF</strong> memakai material asli bawaan file. Pilih <strong>Chibi Sporty</strong> atau <strong>Atlet Realistis</strong> untuk menyesuaikan rambut &amp; aksesori.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Postur &amp; Kacamata
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(
+                        [
+                          { id: 'male', label: 'Laki-laki' },
+                          { id: 'female', label: 'Perempuan' },
+                        ] as Array<{ id: RunnerGender; label: string }>
+                      ).map((g) => (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => onChangeRunner({ ...runner, gender: g.id })}
+                          className={`h-8 px-3 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                            runner.gender === g.id
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="flex items-center justify-between py-1 cursor-pointer">
+                      <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                        Pakai Kacamata Sporty
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={runner.glasses}
+                        onChange={(e) => onChangeRunner({ ...runner, glasses: e.target.checked })}
+                        className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Rambut &amp; Aksesori
+                    </span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(
+                        [
+                          { id: 'undercut', label: 'Undercut' },
+                          { id: 'spiky', label: 'Spiky' },
+                          { id: 'side-fade', label: 'Side Fade' },
+                        ] as Array<{ id: RunnerHairStyle; label: string }>
+                      ).map((h) => (
+                        <button
+                          key={h.id}
+                          type="button"
+                          onClick={() => onChangeRunner({ ...runner, hairStyle: h.id })}
+                          className={`h-8 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                            runner.hairStyle === h.id
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {h.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      {(
+                        [
+                          { id: 'none', label: 'Tanpa Aksesori' },
+                          { id: 'cap', label: 'Topi Sporty' },
+                          { id: 'headband', label: 'Headband' },
+                          { id: 'visor', label: 'Visor' },
+                          { id: 'trail-vest', label: 'Trail Vest + Headlamp' },
+                        ] as Array<{ id: RunnerAccessory; label: string }>
+                      ).map((acc) => (
+                        <button
+                          key={acc.id}
+                          type="button"
+                          onClick={() => onChangeRunner({ ...runner, accessory: acc.id })}
+                          className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold text-left transition-colors cursor-pointer ${
+                            acc.id === 'trail-vest' ? 'col-span-2' : ''
+                          } ${
+                            runner.accessory === acc.id
+                              ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {acc.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </section>
+
+            {/* Kolom 3: Warna Outfit */}
+            <section className="space-y-3 lg:border-l lg:border-slate-100 lg:dark:border-slate-800 lg:pl-6">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Warna Outfit
+              </h3>
+              {runner.characterStyle === 'custom-glb' ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Warna jersey untuk garis rute aktif mengikuti palet berikut:
+                </p>
+              ) : null}
+
+              {(
+                [
+                  { key: 'jerseyColor', label: 'Jersey & Garis Rute', swatches: JERSEY_SWATCHES },
+                  ...(runner.characterStyle === 'custom-glb'
+                    ? []
+                    : ([
+                        { key: 'shortsColor', label: 'Celana', swatches: SHORTS_SWATCHES },
+                        { key: 'shoesColor', label: 'Sepatu', swatches: SHOE_SWATCHES },
+                      ] as const)),
+                ] as ReadonlyArray<{
+                  key: 'jerseyColor' | 'shortsColor' | 'shoesColor';
+                  label: string;
+                  swatches: string[];
+                }>
+              ).map((item) => (
+                <div key={item.key} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-medium text-slate-700 dark:text-slate-300">
+                      {item.label}
+                    </span>
+                    <input
+                      type="color"
+                      aria-label={`Pilih warna ${item.label}`}
+                      value={runner[item.key]}
+                      onChange={(e) => onChangeRunner({ ...runner, [item.key]: e.target.value })}
+                      className="w-6 h-5 rounded cursor-pointer border-0 bg-transparent"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {item.swatches.map((hex) => (
+                      <button
+                        key={hex}
+                        type="button"
+                        aria-label={`${item.label} ${hex}`}
+                        onClick={() => onChangeRunner({ ...runner, [item.key]: hex })}
+                        style={{ backgroundColor: hex }}
+                        className={`w-6 h-6 rounded-md border transition-transform cursor-pointer ${
+                          runner[item.key].toLowerCase() === hex.toLowerCase()
+                            ? 'ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-slate-900 scale-110 border-white'
+                            : 'border-slate-300 dark:border-slate-600'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'peta' && (
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            data-testid="studio3d-panel-peta"
+          >
+            {/* Kolom 1: Peta Nyata, Load Map & Gedung OSM */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Peta Dunia Nyata
+                </h3>
+                <button
+                  type="button"
+                  data-testid="studio3d-panel-reload-map-btn"
+                  onClick={onReloadMap}
+                  className="h-7 px-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                >
+                  <RefreshCw
+                    className={`w-3 h-3 ${isMapLoading ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>{isMapLoading ? 'Memuat...' : 'Muat Ulang Peta'}</span>
+                </button>
+              </div>
+
+              <p className="font-mono-tabular text-[11px] text-slate-600 dark:text-slate-300">
+                {mapStatusText}
+              </p>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    { id: 'standard', label: 'Street' },
+                    { id: 'satellite', label: 'Satellite' },
+                    { id: 'terrain', label: 'Terrain' },
+                    { id: 'monochrome', label: 'Monochrome' },
+                    { id: 'hybrid', label: 'Hybrid' },
+                    { id: 'city3d', label: '3D City' },
+                    { id: 'liberty', label: 'Liberty (Vector · OpenFreeMap)' },
+                  ] as Array<{ id: CanonicalMapStyle3D; label: string }>
+                ).map((ms) => {
+                  const isActive = normalizeMapStyle3D(mapConfig.mapStyle) === ms.id;
+                  return (
+                    <button
+                      key={ms.id}
+                      type="button"
+                      data-testid={`studio3d-mapstyle-${ms.id}`}
+                      onClick={() =>
+                        onChangeMapConfig({
+                          ...mapConfig,
+                          mapStyle: ms.id,
+                          buildings3d:
+                            ms.id === 'city3d' || ms.id === 'liberty'
+                              ? true
+                              : mapConfig.buildings3d,
+                        })
+                      }
+                      className={`px-3 py-2 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
+                        ms.id === 'liberty' ? 'col-span-2' : ''
+                      } ${
+                        isActive
+                          ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {ms.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Layer Overlay Tekstur Three.js */}
+              <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Layer Overlay 3D (Three.js)
+                </span>
+                <div className="space-y-1">
+                  <label className="flex items-center justify-between py-1 cursor-pointer">
+                    <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                      Kontur &amp; Hillshade 3D
+                    </span>
+                    <input
+                      type="checkbox"
+                      data-testid="studio3d-overlay-relief"
+                      checked={mapConfig.overlayRelief ?? true}
+                      onChange={(e) =>
+                        onChangeMapConfig({ ...mapConfig, overlayRelief: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between py-1 cursor-pointer">
+                    <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                      Detail Permukaan PBR
+                    </span>
+                    <input
+                      type="checkbox"
+                      data-testid="studio3d-overlay-surface"
+                      checked={mapConfig.overlaySurface ?? true}
+                      onChange={(e) =>
+                        onChangeMapConfig({ ...mapConfig, overlaySurface: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between py-1 cursor-pointer">
+                    <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                      Label &amp; Referensi Jalan
+                    </span>
+                    <input
+                      type="checkbox"
+                      data-testid="studio3d-overlay-labels"
+                      checked={mapConfig.overlayLabels ?? true}
+                      onChange={(e) =>
+                        onChangeMapConfig({ ...mapConfig, overlayLabels: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Gaya Garis Rute (Google Maps) */}
+              <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Gaya Rute (Google Maps)
+                </span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(
+                    [
+                      { id: 'google-maps', label: 'Google Maps', desc: 'Biru + panah arah' },
+                      { id: 'google-pace', label: 'Pace / Traffic', desc: 'Hijau–kuning–merah' },
+                      { id: 'sport-jersey', label: 'Warna Jersey', desc: 'Sesuai jersey + arah' },
+                      { id: 'minimal-clean', label: 'Minimal', desc: 'Garis polos bersih' },
+                      { id: 'sportbyte-lime', label: 'Sport Byte Lime', desc: 'Lime #a6f04b + casing gelap' },
+                    ] as Array<{ id: RouteVisualStyle3D; label: string; desc: string }>
+                  ).map((rs) => {
+                    const active = (mapConfig.routeStyle ?? 'google-maps') === rs.id;
+                    return (
+                      <button
+                        key={rs.id}
+                        type="button"
+                        data-testid={`studio3d-routestyle-${rs.id}`}
+                        onClick={() => onChangeMapConfig({ ...mapConfig, routeStyle: rs.id })}
+                        className={`px-2.5 py-1.5 rounded-lg border text-left transition-colors cursor-pointer ${
+                          rs.id === 'sportbyte-lime' ? 'col-span-2' : ''
+                        } ${
+                          active
+                            ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="block text-[11px] font-semibold leading-tight">
+                          {rs.label}
+                        </span>
+                        <span className="block text-[9px] opacity-75">{rs.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Penyesuaian Jalur (GPS Asli vs Snap ke Jalan OSRM) */}
+              <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Penyesuaian Jalur
+                </span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(
+                    [
+                      { id: 'raw', label: 'GPS Asli' },
+                      { id: 'snap-road', label: 'Snap ke Jalan (Maps)' },
+                    ] as Array<{ id: RouteSnapMode3D; label: string }>
+                  ).map((sm) => {
+                    const active = (mapConfig.routeSnapMode ?? 'raw') === sm.id;
+                    return (
+                      <button
+                        key={sm.id}
+                        type="button"
+                        data-testid={`studio3d-routesnap-${sm.id}`}
+                        onClick={() => onChangeMapConfig({ ...mapConfig, routeSnapMode: sm.id })}
+                        className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                          active
+                            ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {sm.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {(mapConfig.routeSnapMode ?? 'raw') === 'snap-road' && (
+                  <p
+                    data-testid="studio3d-routesnap-status"
+                    className="text-[10px] font-medium text-slate-500 dark:text-slate-400"
+                  >
+                    {routeSnapStatus === 'matching'
+                      ? 'Menyelaraskan rute GPS ke jalan OSM...'
+                      : routeSnapStatus === 'matched'
+                        ? 'Rute terselaraskan ke jalan (OSRM).'
+                        : routeSnapStatus === 'fallback'
+                          ? 'Jalan sekitar tidak ditemukan, memakai GPS asli.'
+                          : 'Siap menyelaraskan ke jalan.'}
+                  </p>
+                )}
+              </div>
+
+              <label className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 cursor-pointer">
+                <div>
+                  <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100">
+                    Gedung &amp; Jalan 3D OSM
+                  </span>
+                  <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                    Bangunan &amp; jaringan jalan nyata di sepanjang rute
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={mapConfig.buildings3d}
+                  onChange={(e) => onChangeMapConfig({ ...mapConfig, buildings3d: e.target.checked })}
+                  className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                />
+              </label>
+
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 pt-1">
+                Data peta &amp; elevasi: © OpenStreetMap · Esri · Open-Meteo DEM
+              </p>
+            </section>
+
+            {/* Kolom 2: Pencahayaan & Header Info Video */}
+            <section className="space-y-4 md:border-l md:border-slate-100 md:dark:border-slate-800 md:pl-6">
+              <div className="space-y-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Pencahayaan &amp; Suasana
+                </h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'auto', label: 'Auto' },
+                      { id: 'morning', label: 'Pagi' },
+                      { id: 'evening', label: 'Sore' },
+                      { id: 'night', label: 'Malam' },
+                      { id: 'city-park', label: 'City Park' },
+                      { id: 'mountain', label: 'Mountain' },
+                      { id: 'night-run', label: 'Night Run' },
+                    ] as Array<{ id: LightingMood3D; label: string }>
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => onChangeMapConfig({ ...mapConfig, lightingMood: m.id })}
+                      className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                        mapConfig.lightingMood === m.id
+                          ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Info Aktivitas (Overlay Video)
+                </h3>
+                {track ? (
+                  <>
+                    <input
+                      type="text"
+                      value={track.title}
+                      onChange={(e) => onUpdateTrackInfo({ title: e.target.value })}
+                      placeholder="Nama Aktivitas"
+                      className="w-full h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-medium text-slate-900 dark:text-white"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="date"
+                        value={track.date}
+                        onChange={(e) => onUpdateTrackInfo({ date: e.target.value })}
+                        className="h-8 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono-tabular text-xs text-slate-900 dark:text-white"
+                      />
+                      <input
+                        type="text"
+                        value={track.location}
+                        onChange={(e) => onUpdateTrackInfo({ location: e.target.value })}
+                        placeholder="Lokasi Rute"
+                        className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Upload file <strong>.FIT</strong> / <strong>.GPX</strong> atau pilih riwayat lari untuk mengedit info rute.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            {/* Kolom 3: Landmark Rute */}
+            <section className="space-y-3 lg:border-l lg:border-slate-100 lg:dark:border-slate-800 lg:pl-6">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5" aria-hidden="true" />
+                Landmark Rute ({visibleLandmarks.length})
+              </h3>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  disabled={!track}
+                  value={newLandmarkLabel}
+                  onChange={(e) => setNewLandmarkLabel(e.target.value)}
+                  placeholder="Label landmark (mis. Water Station)"
+                  className="flex-1 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white disabled:opacity-50"
+                />
+                <input
+                  type="number"
+                  disabled={!track}
+                  min={5}
+                  max={95}
+                  value={newLandmarkPct}
+                  onChange={(e) => setNewLandmarkPct(Number(e.target.value))}
+                  title="Posisi % di rute"
+                  className="w-14 h-8 px-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono-tabular text-xs text-center text-slate-900 dark:text-white disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  disabled={!track}
+                  onClick={() => {
+                    const clean = newLandmarkLabel.trim();
+                    if (!clean || !track) return;
+                    onAddCustomLandmark(clean, Math.min(98, Math.max(2, newLandmarkPct)) / 100);
+                    setNewLandmarkLabel('');
+                  }}
+                  className="h-8 px-2.5 rounded-lg bg-slate-900 dark:bg-blue-600 text-white text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap cursor-pointer hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  Pin
+                </button>
+              </div>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                {visibleLandmarks.map((lm) => (
+                  <div
+                    key={lm.id}
+                    className="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800/80 last:border-b-0 text-[11px]"
+                  >
+                    <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                      {lm.label}
+                      <span className="ml-1.5 font-mono-tabular text-slate-400">
+                        · {lm.distanceKm.toFixed(1)} km
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveLandmark(lm.id)}
+                      aria-label={`Hapus landmark ${lm.label}`}
+                      className="text-slate-400 hover:text-rose-500 p-0.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'export' && (
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            data-testid="studio3d-panel-export"
+          >
+            {/* Kolom 1: Durasi & Pose Finish */}
+            <section className="space-y-4">
+              <div className="space-y-2">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Durasi Video 9:16
+                </h3>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(
+                    [
+                      { id: 15, label: '15d', sub: 'Story' },
+                      { id: 30, label: '30d', sub: 'Reels' },
+                      { id: 45, label: '45d', sub: 'Detail' },
+                      { id: 60, label: '60d', sub: 'Penuh' },
+                      { id: 'custom', label: 'Kustom', sub: 'Bebas' },
+                    ] as Array<{ id: DurationPresetSec; label: string; sub: string }>
+                  ).map((d) => (
+                    <button
+                      key={String(d.id)}
+                      type="button"
+                      onClick={() => onChangeExportConfig({ ...exportConfig, durationPreset: d.id })}
+                      className={`py-2 px-1 rounded-lg border text-center transition-colors cursor-pointer ${
+                        exportConfig.durationPreset === d.id
+                          ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="block font-mono-tabular text-xs font-bold">{d.label}</span>
+                      <span className="block text-[9px] opacity-75">{d.sub}</span>
+                    </button>
+                  ))}
+                </div>
+                {exportConfig.durationPreset === 'custom' && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <label className="text-xs text-slate-600 dark:text-slate-300">Detik:</label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={120}
+                      value={exportConfig.customDurationSec}
+                      onChange={(e) =>
+                        onChangeExportConfig({
+                          ...exportConfig,
+                          customDurationSec: Number(e.target.value) || 20,
+                        })
+                      }
+                      className="w-24 h-8 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono-tabular text-xs text-slate-900 dark:text-white"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-orange-500" aria-hidden="true" />
+                    <div>
+                      <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100">
+                        + Pose Finish di Akhir Video
+                      </span>
+                      <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                        Animasi selebrasi &amp; banner hasil akhir
+                      </span>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={exportConfig.includeFinishPose}
+                    onChange={(e) =>
+                      onChangeExportConfig({
+                        ...exportConfig,
+                        includeFinishPose: e.target.checked,
+                      })
+                    }
+                    className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
+                  />
+                </label>
+
+                {exportConfig.includeFinishPose && (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {FINISH_POSE_OPTIONS.map((pose) => (
+                      <button
+                        key={pose.id}
+                        type="button"
+                        onClick={() => onChangeRunner({ ...runner, finishPoseStyle: pose.id })}
+                        className={`px-2 py-1.5 rounded-lg border text-[11px] font-semibold text-center transition-colors cursor-pointer ${
+                          runner.finishPoseStyle === pose.id
+                            ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {pose.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Kolom 2: Musik Latar & Volume */}
+            <section className="space-y-3 md:border-l md:border-slate-100 md:dark:border-slate-800 md:pl-6">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Music className="w-3.5 h-3.5" aria-hidden="true" />
+                Musik Latar &amp; Volume
+              </h3>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    { id: 'none', label: 'Tanpa Musik' },
+                    { id: 'upbeat-synth', label: 'Upbeat Synth (128)' },
+                    { id: 'lofi-stride', label: 'Lo-Fi Stride (96)' },
+                    { id: 'epic-trail', label: 'Epic Trail (116)' },
+                  ] as Array<{ id: MusicPreset3D; label: string }>
+                ).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onChangeExportConfig({ ...exportConfig, musicPreset: m.id })}
+                    className={`px-2.5 py-2 rounded-lg border text-[11px] font-semibold text-left transition-colors cursor-pointer ${
+                      exportConfig.musicPreset === m.id
+                        ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                <input
+                  ref={mp3InputRef}
+                  type="file"
+                  accept="audio/mpeg,audio/mp3,audio/*"
+                  className="hidden"
+                  onChange={handleMp3Upload}
+                />
+                <button
+                  type="button"
+                  onClick={() => mp3InputRef.current?.click()}
+                  className={`w-full h-8 px-3 rounded-lg border text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer ${
+                    exportConfig.musicPreset === 'custom-mp3'
+                      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                      : 'border-dashed border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span className="truncate">
+                    {exportConfig.customAudioName
+                      ? `MP3: ${exportConfig.customAudioName}`
+                      : 'Upload MP3 Sendiri'}
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2.5 pt-1">
+                <Volume2 className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={exportConfig.volume}
+                  aria-label="Volume musik latar"
+                  onChange={(e) =>
+                    onChangeExportConfig({ ...exportConfig, volume: Number(e.target.value) })
+                  }
+                  className="flex-1 accent-blue-600 cursor-pointer"
+                />
+                <span className="font-mono-tabular text-[11px] font-semibold text-slate-600 dark:text-slate-300 w-9 text-right">
+                  {Math.round(exportConfig.volume * 100)}%
+                </span>
+              </div>
+            </section>
+
+            {/* Kolom 3: Kualitas & Tombol Render 9:16 */}
+            <section className="space-y-3 lg:border-l lg:border-slate-100 lg:dark:border-slate-800 lg:pl-6 flex flex-col justify-between">
+              <div className="space-y-2.5">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Kualitas &amp; Render (9:16)
+                </h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      { id: '720p', title: 'HD Smooth 720p', sub: '720×1280 · 30fps' },
+                      { id: '1080p', title: 'Full HD 1080p', sub: '1080×1920 · 30fps' },
+                    ] as Array<{ id: VideoQuality3D; title: string; sub: string }>
+                  ).map((q) => (
+                    <button
+                      key={q.id}
+                      type="button"
+                      onClick={() => onChangeExportConfig({ ...exportConfig, quality: q.id })}
+                      className={`px-3 py-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                        exportConfig.quality === q.id
+                          ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="block text-xs font-bold">{q.title}</span>
+                      <span className="block font-mono-tabular text-[10px] opacity-80">{q.sub}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {exportError && (
+                <div className="rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+                  {exportError}
+                </div>
+              )}
+
+              {lastExportInfo && !isExporting && (
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
+                  Video berhasil diekspor: <strong>{lastExportInfo.filename}</strong> ({lastExportInfo.sizeMb} MB)
+                </div>
+              )}
+
+              <div>
+                {isExporting ? (
+                  <div className="space-y-2">
+                    <div className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-orange-500 transition-all duration-150"
+                        style={{ width: `${exportPercent}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono-tabular text-xs font-semibold text-slate-700 dark:text-slate-200">
+                        Merender Video 9:16... {exportPercent}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={onCancelExport}
+                        className="h-8 px-3 rounded-lg border border-rose-300 dark:border-rose-800 text-xs font-semibold text-rose-600 dark:text-rose-400 inline-flex items-center gap-1 cursor-pointer hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                      >
+                        <X className="w-3.5 h-3.5" aria-hidden="true" />
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="studio3d-export-btn"
+                    disabled={!track}
+                    onClick={onStartExport}
+                    className="w-full h-11 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {track
+                        ? `Render & Download 9:16 (${getExportDurationSec(exportConfig)}d · ${exportConfig.quality})`
+                        : 'Upload .FIT / .GPX dulu untuk Export'}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+==================== src/components/studio3d/TerrainMap3D.tsx ====================
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useThree } from '@react-three/fiber';
+import * as THREE from 'three';
+import {
+  normalizeMapStyle3D,
+  type LightingMood3D,
+  type MapLoadStatus,
+  type MapStyle3D,
+  type OsmBuildingFootprint,
+  type OsmRoadWay,
+  type RouteVisualStyle3D,
+  type Studio3DLandmark,
+  type Studio3DTrack,
+} from '../../types/studio3d';
+import {
+  buildPaceColoredRouteRibbonGeometry,
+  buildSlimRouteRibbonGeometry,
+  sampleGroundedRouteAtProgress,
+  type GroundedRoutePath,
+} from '../../utils/studio3dGpsEngine';
+import {
+  buildMapCompositeTexture,
+  buildMergedOsmBuildingsGeometry,
+  buildOsmRoadNetworkGeometry,
+  createTerrainReliefOverlayTexture,
+  createTerrainSurfaceDetailMaps,
+  fetchOsmBuildingsForTrack,
+  fetchOsmRoadsForTrack,
+  latLonToLocalMeters,
+  sampleTerrainY,
+  type RealDemGrid,
+  type TerrainGridConfig,
+} from '../../utils/studio3dMapTiles';
+
+interface TerrainMap3DProps {
+  track: Studio3DTrack;
+  grid: TerrainGridConfig;
+  demGrid: RealDemGrid | null;
+  mapStyle: MapStyle3D;
+  routeStyle?: RouteVisualStyle3D;
+  buildings3d: boolean;
+  overlayRelief?: boolean;
+  overlaySurface?: boolean;
+  overlayLabels?: boolean;
+  resolvedMood: Exclude<LightingMood3D, 'auto'>;
+  jerseyColor: string;
+  routeProgress: number;
+  groundedPath: GroundedRoutePath;
+  mapReloadNonce: number;
+  onMapLoadStatus?: (status: MapLoadStatus) => void;
+}
+
+function createGoogleMapsChevronTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, 128, 128);
+    // Crisp forward-pointing chevron (v=0 bottom -> v=1 top along runner direction)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.lineWidth = 13;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(32, 82);
+    ctx.lineTo(64, 42);
+    ctx.lineTo(96, 82);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createLandmarkSpriteTexture(
+  landmark: Studio3DLandmark,
+  sportByteDarkBadge = false,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 320;
+  canvas.height = 112;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const bgColor =
+      landmark.type === 'start'
+        ? sportByteDarkBadge
+          ? '#35D07F'
+          : '#10B981'
+        : landmark.type === 'finish'
+          ? sportByteDarkBadge
+            ? '#FF626D'
+            : '#F97316'
+          : landmark.type === 'peak'
+            ? '#8B5CF6'
+            : landmark.type === 'custom'
+              ? '#EC4899'
+              : sportByteDarkBadge
+                ? '#111C25'
+                : '#0F172A';
+
+    ctx.fillStyle = bgColor;
+    ctx.beginPath();
+    ctx.roundRect(14, 14, 292, 74, 18);
+    ctx.fill();
+
+    ctx.strokeStyle =
+      sportByteDarkBadge && landmark.type !== 'start' && landmark.type !== 'finish'
+        ? 'rgba(166, 240, 75, 0.92)'
+        : 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(landmark.label.slice(0, 18), 160, 52);
+
+    ctx.fillStyle =
+      sportByteDarkBadge && landmark.type !== 'start' && landmark.type !== 'finish'
+        ? '#A6F04B'
+        : '#FFFFFF';
+    ctx.beginPath();
+    ctx.moveTo(148, 88);
+    ctx.lineTo(172, 88);
+    ctx.lineTo(160, 106);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const LandmarkMarker3D: React.FC<{
+  landmark: Studio3DLandmark;
+  position: THREE.Vector3;
+  scaleFactor: number;
+  sportByteDarkBadge?: boolean;
+}> = ({ landmark, position, scaleFactor, sportByteDarkBadge = false }) => {
+  const spriteTex = useMemo(
+    () => createLandmarkSpriteTexture(landmark, sportByteDarkBadge),
+    [landmark, sportByteDarkBadge],
+  );
+  useEffect(() => () => spriteTex.dispose(), [spriteTex]);
+
+  const pinColor =
+    landmark.type === 'start'
+      ? '#10B981'
+      : landmark.type === 'finish'
+        ? '#F97316'
+        : landmark.type === 'peak'
+          ? '#8B5CF6'
+          : landmark.type === 'custom'
+            ? '#EC4899'
+            : '#38BDF8';
+
+  return (
+    <group position={[position.x, position.y, position.z]}>
+      <mesh position={[0, scaleFactor * 1.4, 0]}>
+        <cylinderGeometry args={[scaleFactor * 0.12, scaleFactor * 0.12, scaleFactor * 2.8, 10]} />
+        <meshStandardMaterial color="#F8FAFC" roughness={0.4} metalness={0.3} />
+      </mesh>
+      <mesh position={[0, scaleFactor * 2.9, 0]}>
+        <sphereGeometry args={[scaleFactor * 0.38, 12, 12]} />
+        <meshStandardMaterial color={pinColor} roughness={0.35} emissive={pinColor} emissiveIntensity={0.25} />
+      </mesh>
+      <sprite position={[0, scaleFactor * 5.0, 0]} scale={[scaleFactor * 7.8, scaleFactor * 2.7, 1]}>
+        <spriteMaterial map={spriteTex} transparent depthTest={false} />
+      </sprite>
+    </group>
+  );
+};
+
+export const TerrainMap3D: React.FC<TerrainMap3DProps> = ({
+  track,
+  grid,
+  demGrid,
+  mapStyle,
+  routeStyle = 'google-maps',
+  buildings3d,
+  overlayRelief = true,
+  overlaySurface = true,
+  overlayLabels = true,
+  resolvedMood,
+  jerseyColor,
+  routeProgress,
+  groundedPath,
+  mapReloadNonce,
+  onMapLoadStatus,
+}) => {
+  const { gl } = useThree();
+  const [mapTexture, setMapTexture] = useState<THREE.CanvasTexture | null>(null);
+  const [osmBuildings, setOsmBuildings] = useState<OsmBuildingFootprint[]>([]);
+  const [osmRoads, setOsmRoads] = useState<OsmRoadWay[]>([]);
+  const activeTextureRef = useRef<THREE.CanvasTexture | null>(null);
+
+  const normalizedStyle = normalizeMapStyle3D(mapStyle);
+  const isNight = resolvedMood === 'night' || resolvedMood === 'night-run';
+  const isEvening = resolvedMood === 'evening';
+  const showOsmBuildings = buildings3d || normalizedStyle === 'city3d';
+  const showOsmRoads =
+    normalizedStyle === 'standard' ||
+    normalizedStyle === 'liberty' ||
+    normalizedStyle === 'city3d' ||
+    normalizedStyle === 'terrain' ||
+    normalizedStyle === 'hybrid' ||
+    normalizedStyle === 'monochrome';
+
+  // Align Mercator tile box center strictly with track local meter coordinates
+  const { gridCenterX, gridCenterZ } = useMemo(() => {
+    const nw = latLonToLocalMeters(grid.northLat, grid.westLon, track.centerLat, track.centerLon);
+    const se = latLonToLocalMeters(grid.southLat, grid.eastLon, track.centerLat, track.centerLon);
+    return {
+      gridCenterX: (nw.xM + se.xM) / 2,
+      gridCenterZ: (nw.zM + se.zM) / 2,
+    };
+  }, [grid, track.centerLat, track.centerLon]);
+
+  // Higher-resolution 112x112 elevation-displaced terrain mapped 1:1 to Mercator extents & DEM
+  const terrainGeometry = useMemo(() => {
+    const geom = new THREE.PlaneGeometry(grid.widthMeters, grid.depthMeters, 112, 112);
+    const pos = geom.attributes.position;
+    for (let i = 0; i < pos.count; i += 1) {
+      const vx = pos.getX(i);
+      const vy = pos.getY(i);
+      const worldX = gridCenterX + vx;
+      const worldZ = gridCenterZ - vy; // After -90deg X rotation, +vy maps to -Z
+      const h = sampleTerrainY(worldX, worldZ, track, demGrid);
+      pos.setZ(i, h);
+    }
+    geom.computeVertexNormals();
+    return geom;
+  }, [grid.widthMeters, grid.depthMeters, gridCenterX, gridCenterZ, track, demGrid]);
+
+  useEffect(() => () => terrainGeometry.dispose(), [terrainGeometry]);
+
+  // Procedural Three.js PBR bump & roughness detail maps for ground realism
+  const surfaceMaps = useMemo(
+    () =>
+      createTerrainSurfaceDetailMaps(
+        mapStyle,
+        grid.widthMeters,
+        grid.depthMeters,
+        gl.capabilities.getMaxAnisotropy(),
+      ),
+    [mapStyle, grid.widthMeters, grid.depthMeters, gl],
+  );
+  useEffect(() => {
+    return () => {
+      surfaceMaps.bumpMap.dispose();
+      surfaceMaps.roughnessMap.dispose();
+    };
+  }, [surfaceMaps]);
+
+  // Procedural Three.js NW solar hillshade & elevation contour overlay texture
+  const reliefOverlayTex = useMemo(
+    () =>
+      createTerrainReliefOverlayTexture(
+        gridCenterX,
+        gridCenterZ,
+        grid.widthMeters,
+        grid.depthMeters,
+        track,
+        demGrid,
+        mapStyle,
+        gl.capabilities.getMaxAnisotropy(),
+      ),
+    [gridCenterX, gridCenterZ, grid.widthMeters, grid.depthMeters, track, demGrid, mapStyle, gl],
+  );
+  useEffect(() => () => reliefOverlayTex.dispose(), [reliefOverlayTex]);
+
+  // Load CORS-safe Web Mercator raster tiles onto CanvasTexture and report exact progress
+  useEffect(() => {
+    const controller = new AbortController();
+    let createdTexture: THREE.CanvasTexture | null = null;
+    const maxAniso = gl.capabilities.getMaxAnisotropy();
+
+    if (activeTextureRef.current) {
+      activeTextureRef.current.dispose();
+      activeTextureRef.current = null;
+    }
+    setMapTexture(null);
+
+    void buildMapCompositeTexture(
+      grid,
+      mapStyle,
+      maxAniso,
+      controller.signal,
+      (status) => {
+        if (!controller.signal.aborted) {
+          onMapLoadStatus?.(status);
+        }
+      },
+      mapReloadNonce,
+      overlayLabels,
+    ).then(({ texture }) => {
+      if (controller.signal.aborted) {
+        texture.dispose();
+        return;
+      }
+      if (activeTextureRef.current && activeTextureRef.current !== texture) {
+        activeTextureRef.current.dispose();
+      }
+      createdTexture = texture;
+      activeTextureRef.current = texture;
+      setMapTexture(texture);
+    });
+
+    return () => {
+      controller.abort();
+      if (createdTexture) {
+        createdTexture.dispose();
+        if (activeTextureRef.current === createdTexture) {
+          activeTextureRef.current = null;
+        }
+      }
+    };
+  }, [grid, mapStyle, gl, mapReloadNonce, overlayLabels, onMapLoadStatus]);
+
+  useEffect(() => {
+    return () => {
+      if (activeTextureRef.current) {
+        activeTextureRef.current.dispose();
+        activeTextureRef.current = null;
+      }
+    };
+  }, []);
+
+  // Fetch real OSM vector roads around route corridor
+  useEffect(() => {
+    setOsmRoads([]);
+    if (!showOsmRoads) return;
+    const controller = new AbortController();
+    void fetchOsmRoadsForTrack(track, controller.signal).then((ways) => {
+      if (!controller.signal.aborted) {
+        setOsmRoads(ways);
+      }
+    });
+    return () => controller.abort();
+  }, [track, showOsmRoads, mapReloadNonce]);
+
+  // Fetch corridor-prioritized OSM 3D building footprints
+  useEffect(() => {
+    setOsmBuildings([]);
+    if (!showOsmBuildings) return;
+    const controller = new AbortController();
+    void fetchOsmBuildingsForTrack(track, controller.signal).then((items) => {
+      if (!controller.signal.aborted) {
+        setOsmBuildings(items);
+      }
+    });
+    return () => controller.abort();
+  }, [track, showOsmBuildings, mapReloadNonce]);
+
+  // Build single batched terrain-draped OSM road network BufferGeometry
+  const osmRoadsGeo = useMemo(
+    () =>
+      showOsmRoads
+        ? buildOsmRoadNetworkGeometry(osmRoads, track, demGrid, isNight, mapStyle)
+        : null,
+    [showOsmRoads, osmRoads, track, demGrid, isNight, mapStyle],
+  );
+  useEffect(() => () => osmRoadsGeo?.dispose(), [osmRoadsGeo]);
+
+  // Build single batched OSM 3D building BufferGeometry
+  const osmBuildingsGeo = useMemo(
+    () =>
+      showOsmBuildings
+        ? buildMergedOsmBuildingsGeometry(osmBuildings, track, demGrid, isNight, isEvening, mapStyle)
+        : null,
+    [showOsmBuildings, osmBuildings, track, demGrid, isNight, isEvening, mapStyle],
+  );
+  useEffect(() => () => osmBuildingsGeo?.dispose(), [osmBuildingsGeo]);
+
+  // Google Maps-style layered route ribbons (outer casing, upcoming guide path, active ribbon, directional chevrons)
+  const routeHalfWidth = Math.max(0.55, Math.min(1.25, track.spanMeters * 0.00062));
+  const chevronTileM = Math.max(4.5, routeHalfWidth * 7.2);
+  const showCasing = routeStyle !== 'minimal-clean';
+  const showChevrons = routeStyle !== 'minimal-clean';
+
+  const chevronTex = useMemo(() => createGoogleMapsChevronTexture(), []);
+  useEffect(() => () => chevronTex.dispose(), [chevronTex]);
+
+  const casingRibbonGeo = useMemo(
+    () => buildSlimRouteRibbonGeometry(groundedPath, routeHalfWidth * 1.42, { tileLenM: chevronTileM }),
+    [groundedPath, routeHalfWidth, chevronTileM],
+  );
+  const guideRibbonGeo = useMemo(
+    () => buildSlimRouteRibbonGeometry(groundedPath, routeHalfWidth * 0.88, { tileLenM: chevronTileM }),
+    [groundedPath, routeHalfWidth, chevronTileM],
+  );
+  const activeRibbonGeo = useMemo(
+    () =>
+      routeStyle === 'google-pace'
+        ? buildPaceColoredRouteRibbonGeometry(groundedPath, track.points, routeHalfWidth * 1.06, {
+            tileLenM: chevronTileM,
+          })
+        : buildSlimRouteRibbonGeometry(groundedPath, routeHalfWidth * 1.06, {
+            tileLenM: chevronTileM,
+          }),
+    [groundedPath, track.points, routeStyle, routeHalfWidth, chevronTileM],
+  );
+  const chevronRibbonGeo = useMemo(
+    () => buildSlimRouteRibbonGeometry(groundedPath, routeHalfWidth * 0.94, { tileLenM: chevronTileM }),
+    [groundedPath, routeHalfWidth, chevronTileM],
+  );
+
+  useEffect(() => {
+    return () => {
+      casingRibbonGeo.dispose();
+      guideRibbonGeo.dispose();
+      activeRibbonGeo.dispose();
+      chevronRibbonGeo.dispose();
+    };
+  }, [casingRibbonGeo, guideRibbonGeo, activeRibbonGeo, chevronRibbonGeo]);
+
+  // Slice traversed route ribbon strictly by cumulative arc distance matching runnerPos
+  useEffect(() => {
+    const verts = groundedPath.vertices;
+    if (verts.length < 2 || routeProgress <= 0.003) {
+      activeRibbonGeo.setDrawRange(0, 0);
+      return;
+    }
+    if (routeProgress >= 0.999) {
+      activeRibbonGeo.setDrawRange(0, (verts.length - 1) * 6);
+      return;
+    }
+    const targetDist = routeProgress * groundedPath.totalArcMeters;
+    let lo = 0;
+    let hi = verts.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (verts[mid].distM <= targetDist) lo = mid;
+      else hi = mid;
+    }
+    const segCount = Math.max(1, Math.min(verts.length - 1, lo + 1));
+    activeRibbonGeo.setDrawRange(0, segCount * 6);
+  }, [activeRibbonGeo, groundedPath, routeProgress]);
+
+  const isSportByteLime = routeStyle === 'sportbyte-lime';
+  const casingColor =
+    routeStyle === 'google-maps'
+      ? '#174EA6'
+      : isSportByteLime
+        ? '#14232C'
+        : routeStyle === 'google-pace'
+          ? '#1E293B'
+          : '#0F172A';
+  const guideColor =
+    routeStyle === 'google-maps'
+      ? isNight
+        ? '#3B82F6'
+        : '#93C5FD'
+      : isSportByteLime
+        ? isNight
+          ? '#4D7C0F'
+          : '#64748B'
+        : isNight
+          ? '#64748B'
+          : '#94A3B8';
+  const activeBaseColor =
+    routeStyle === 'google-maps'
+      ? '#1A73E8'
+      : isSportByteLime
+        ? '#A6F04B'
+        : routeStyle === 'google-pace'
+          ? '#FFFFFF'
+          : jerseyColor;
+
+  // Landmarks pinned directly onto grounded route path by cumulative distance progress
+  const landmarkMarkers = useMemo(() => {
+    return track.landmarks
+      .filter((lm) => lm.type !== 'start' && lm.type !== 'finish')
+      .map((lm) => {
+        const { position } = sampleGroundedRouteAtProgress(
+          groundedPath,
+          THREE.MathUtils.clamp(lm.progress, 0, 1),
+        );
+        return { landmark: lm, position };
+      });
+  }, [track.landmarks, groundedPath]);
+
+  const landmarkScale = Math.max(1.1, Math.min(3.2, track.spanMeters * 0.002));
+
+  return (
+    <group name="TerrainMapRoot">
+      {/* Ground Elevation Mesh with Real Web Mercator Raster Map Texture + PBR Surface Detail */}
+      <mesh
+        position={[gridCenterX, 0, gridCenterZ]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        geometry={terrainGeometry}
+        receiveShadow
+      >
+        <meshStandardMaterial
+          key={`${mapTexture ? mapTexture.uuid : 'pending'}-${overlaySurface ? 'surf' : 'flat'}-${normalizedStyle}`}
+          map={mapTexture}
+          bumpMap={overlaySurface ? surfaceMaps.bumpMap : null}
+          bumpScale={
+            normalizedStyle === 'terrain'
+              ? 0.45
+              : normalizedStyle === 'satellite' || normalizedStyle === 'hybrid'
+                ? 0.3
+                : 0.16
+          }
+          roughnessMap={overlaySurface ? surfaceMaps.roughnessMap : null}
+          roughness={overlaySurface ? 0.98 : 0.96}
+          metalness={0.0}
+          envMapIntensity={0.14}
+          color={isNight && mapStyle !== 'night' ? '#7B8CA6' : '#FFFFFF'}
+        />
+      </mesh>
+
+      {/* Three.js Elevation Hillshade & Topographic Contour Overlay Texture */}
+      {overlayRelief && (
+        <mesh
+          name="TerrainReliefOverlay"
+          position={[gridCenterX, 0.035, gridCenterZ]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          geometry={terrainGeometry}
+          renderOrder={1}
+        >
+          <meshBasicMaterial
+            key={reliefOverlayTex.uuid}
+            map={reliefOverlayTex}
+            transparent
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-0.3}
+          />
+        </mesh>
+      )}
+
+      {/* Batched OSM Terrain-Draped Road Network (1 draw call) */}
+      {osmRoadsGeo && (
+        <mesh geometry={osmRoadsGeo} receiveShadow>
+          <meshStandardMaterial
+            vertexColors
+            roughness={0.88}
+            metalness={0.02}
+            transparent={
+              normalizedStyle === 'terrain' ||
+              normalizedStyle === 'hybrid' ||
+              normalizedStyle === 'monochrome'
+            }
+            opacity={
+              normalizedStyle === 'hybrid'
+                ? 0.42
+                : normalizedStyle === 'terrain'
+                  ? 0.52
+                  : normalizedStyle === 'monochrome'
+                    ? 0.65
+                    : 0.78
+            }
+            polygonOffset
+            polygonOffsetFactor={-0.5}
+          />
+        </mesh>
+      )}
+
+      {/* Google Maps-style Outer Route Casing */}
+      {showCasing && (
+        <mesh geometry={casingRibbonGeo} position={[0, 0, 0]}>
+          <meshStandardMaterial
+            key={`casing-${routeStyle}`}
+            color={casingColor}
+            roughness={0.55}
+            metalness={0.05}
+            polygonOffset
+            polygonOffsetFactor={-1.0}
+          />
+        </mesh>
+      )}
+
+      {/* Remaining Route Path Guide */}
+      <mesh geometry={guideRibbonGeo} position={[0, 0.015, 0]}>
+        <meshStandardMaterial
+          key={`guide-${routeStyle}-${isNight}`}
+          color={guideColor}
+          transparent
+          opacity={routeStyle === 'google-maps' ? 0.85 : 0.82}
+          roughness={0.58}
+          polygonOffset
+          polygonOffsetFactor={-1.8}
+        />
+      </mesh>
+
+      {/* Active Traversed Route Ribbon (Google Maps Blue / Sport Byte Lime / Pace Gradient / Jersey Color) */}
+      <mesh geometry={activeRibbonGeo} position={[0, 0.032, 0]}>
+        <meshStandardMaterial
+          key={`active-${routeStyle}-${jerseyColor}`}
+          color={activeBaseColor}
+          vertexColors={routeStyle === 'google-pace'}
+          emissive={routeStyle === 'google-pace' ? '#0F172A' : activeBaseColor}
+          emissiveIntensity={
+            routeStyle === 'google-pace'
+              ? 0.14
+              : isSportByteLime
+                ? isNight
+                  ? 0.95
+                  : 0.22
+                : isNight
+                  ? 1.15
+                  : 0.3
+          }
+          roughness={0.34}
+          metalness={0.08}
+          polygonOffset
+          polygonOffsetFactor={-2.8}
+        />
+      </mesh>
+
+      {/* Crisp Directional Chevrons along Route */}
+      {showChevrons && (
+        <mesh geometry={chevronRibbonGeo} position={[0, 0.05, 0]}>
+          <meshBasicMaterial
+            map={chevronTex}
+            color={isSportByteLime ? '#14232C' : '#FFFFFF'}
+            transparent
+            opacity={routeStyle === 'google-maps' ? 0.92 : isSportByteLime ? 0.72 : 0.85}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-3.8}
+          />
+        </mesh>
+      )}
+
+      {/* Route Landmarks (KM markers, Peak, Custom; Start & Finish use popup banners) */}
+      {landmarkMarkers.map((item) => (
+        <LandmarkMarker3D
+          key={item.landmark.id}
+          landmark={item.landmark}
+          position={item.position}
+          scaleFactor={landmarkScale}
+          sportByteDarkBadge={isSportByteLime || normalizedStyle === 'liberty'}
+        />
+      ))}
+
+      {/* Batched 3D OpenStreetMap Buildings (1 draw call, real footprints & heights) */}
+      {osmBuildingsGeo && (
+        <mesh geometry={osmBuildingsGeo} castShadow receiveShadow>
+          <meshStandardMaterial
+            vertexColors
+            roughness={0.76}
+            metalness={0.08}
+            envMapIntensity={0.3}
+            emissive={isNight ? '#1E3A8A' : '#000000'}
+            emissiveIntensity={isNight ? 0.25 : 0}
+          />
+        </mesh>
+      )}
+    </group>
+  );
+};
+
+
+==================== src/components/studio3d/Studio3DCanvas.tsx ====================
+import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { normalizeMapStyle3D } from '../../types/studio3d';
+import type {
+  CameraMode3D,
+  LightingMood3D,
+  MapConfig,
+  MapLoadStatus,
+  RunnerConfig,
+  Studio3DTrack,
+} from '../../types/studio3d';
+import {
+  buildGroundedRoutePath,
+  sampleGroundedRouteAtProgress,
+} from '../../utils/studio3dGpsEngine';
+import {
+  computeTerrainGridConfig,
+  fetchRealDemGridForTrack,
+  sampleTerrainY,
+  type RealDemGrid,
+} from '../../utils/studio3dMapTiles';
+import { resolveEffectiveCameraMode } from '../../utils/studio3dRunnerHelpers';
+import { ChibiRunner3D } from './ChibiRunner3D';
+import { CustomGlbRunner3D, type CustomGlbStatus } from './CustomGlbRunner3D';
+import { RealisticRunner3D } from './RealisticRunner3D';
+import { TerrainMap3D } from './TerrainMap3D';
+
+interface Studio3DCanvasProps {
+  track: Studio3DTrack;
+  runner: RunnerConfig;
+  mapConfig: MapConfig;
+  timelineProgress: number;
+  isPlaying: boolean;
+  includeFinishPose: boolean;
+  currentCadence: number;
+  currentPaceSec: number;
+  mapReloadNonce: number;
+  onMapLoadStatus?: (status: MapLoadStatus) => void;
+  onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
+  onCustomModelStatus?: (status: CustomGlbStatus) => void;
+}
+
+interface MoodPalette {
+  sky: string;
+  fog: string;
+  fogDensity: number;
+  keyColor: string;
+  keyIntensity: number;
+  keyPos: [number, number, number];
+  hemiSky: string;
+  hemiGround: string;
+  hemiIntensity: number;
+  rimColor: string;
+  rimIntensity: number;
+}
+
+function resolveLightingMood(
+  mood: LightingMood3D,
+  mapStyle: MapConfig['mapStyle'],
+): Exclude<LightingMood3D, 'auto'> {
+  if (mood !== 'auto') return mood;
+  if (mapStyle === 'night') return 'night-run';
+  const normalized = normalizeMapStyle3D(mapStyle);
+  if (normalized === 'terrain') return 'mountain';
+  if (normalized === 'satellite' || normalized === 'hybrid') return 'morning';
+  if (normalized === 'liberty') return 'city-park';
+  return 'city-park';
+}
+
+const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
+  morning: {
+    sky: '#BAE6FD',
+    fog: '#E0F2FE',
+    fogDensity: 0.00007,
+    keyColor: '#FFF7ED',
+    keyIntensity: 1.95,
+    keyPos: [160, 220, 120],
+    hemiSky: '#E0F2FE',
+    hemiGround: '#86EFAC',
+    hemiIntensity: 0.72,
+    rimColor: '#FDE68A',
+    rimIntensity: 0.65,
+  },
+  evening: {
+    sky: '#FDBA74',
+    fog: '#FED7AA',
+    fogDensity: 0.00011,
+    keyColor: '#FB923C',
+    keyIntensity: 1.9,
+    keyPos: [-220, 95, 140],
+    hemiSky: '#FDBA74',
+    hemiGround: '#431407',
+    hemiIntensity: 0.6,
+    rimColor: '#F97316',
+    rimIntensity: 0.85,
+  },
+  night: {
+    sky: '#0B1120',
+    fog: '#0F172A',
+    fogDensity: 0.00016,
+    keyColor: '#93C5FD',
+    keyIntensity: 1.05,
+    keyPos: [120, 200, -140],
+    hemiSky: '#1E3A8A',
+    hemiGround: '#020617',
+    hemiIntensity: 0.42,
+    rimColor: '#38BDF8',
+    rimIntensity: 1.35,
+  },
+  'city-park': {
+    sky: '#DBEAFE',
+    fog: '#EFF6FF',
+    fogDensity: 0.00007,
+    keyColor: '#FFFBEB',
+    keyIntensity: 1.85,
+    keyPos: [140, 240, 150],
+    hemiSky: '#DBEAFE',
+    hemiGround: '#4ADE80',
+    hemiIntensity: 0.74,
+    rimColor: '#BAE6FD',
+    rimIntensity: 0.55,
+  },
+  mountain: {
+    sky: '#CBE7F8',
+    fog: '#DCEEF8',
+    fogDensity: 0.00008,
+    keyColor: '#F8FAFC',
+    keyIntensity: 2.0,
+    keyPos: [180, 210, -110],
+    hemiSky: '#E0F2FE',
+    hemiGround: '#475569',
+    hemiIntensity: 0.7,
+    rimColor: '#38BDF8',
+    rimIntensity: 0.6,
+  },
+  'night-run': {
+    sky: '#050816',
+    fog: '#090F24',
+    fogDensity: 0.00018,
+    keyColor: '#60A5FA',
+    keyIntensity: 1.0,
+    keyPos: [100, 190, 130],
+    hemiSky: '#1E1B4B',
+    hemiGround: '#020617',
+    hemiIntensity: 0.44,
+    rimColor: '#F97316',
+    rimIntensity: 1.5,
+  },
+};
+
+function detectSoftwareWebGL(): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2') || c.getContext('webgl');
+    if (!gl) return true;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!ext) return false;
+    const renderer = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '').toLowerCase();
+    return (
+      renderer.includes('swiftshader') ||
+      renderer.includes('llvmpipe') ||
+      renderer.includes('software')
+    );
+  } catch {
+    return false;
+  }
+}
+
+class WebGLErrorBoundary extends Component<
+  { children: React.ReactNode; onErrorFallback?: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; onErrorFallback?: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        this.props.onErrorFallback ?? (
+          <div className="w-full h-full flex items-center justify-center bg-slate-950 text-slate-300 text-xs p-6 text-center">
+            WebGL 3D belum tersedia di perangkat ini.
+          </div>
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const SceneContent: React.FC<{
+  track: Studio3DTrack;
+  runner: RunnerConfig;
+  mapConfig: MapConfig;
+  timelineProgress: number;
+  isPlaying: boolean;
+  includeFinishPose: boolean;
+  currentCadence: number;
+  currentPaceSec: number;
+  mapReloadNonce: number;
+  onMapLoadStatus?: (status: MapLoadStatus) => void;
+  onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
+  onCustomModelStatus?: (status: CustomGlbStatus) => void;
+}> = ({
+  track,
+  runner,
+  mapConfig,
+  timelineProgress,
+  isPlaying,
+  includeFinishPose,
+  currentCadence,
+  currentPaceSec,
+  mapReloadNonce,
+  onMapLoadStatus,
+  onCanvasReady,
+  onCustomModelStatus,
+}) => {
+  const { gl, scene, camera } = useThree();
+  const keyLightRef = useRef<THREE.DirectionalLight>(null);
+  const [demGrid, setDemGrid] = useState<RealDemGrid | null>(null);
+
+  const grid = useMemo(
+    () => computeTerrainGridConfig(track),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      track.id,
+      track.minLat,
+      track.maxLat,
+      track.minLon,
+      track.maxLon,
+      track.centerLat,
+      track.centerLon,
+      track.spanMeters,
+    ],
+  );
+  const resolvedMood = resolveLightingMood(mapConfig.lightingMood, mapConfig.mapStyle);
+  const mood = MOOD_PALETTES[resolvedMood];
+  const isNightMood = resolvedMood === 'night' || resolvedMood === 'night-run';
+
+  // Fetch adaptive 9x9/11x11 real Copernicus/ASTER elevation grid around track & on manual reload
+  useEffect(() => {
+    const controller = new AbortController();
+    setDemGrid(null);
+    void fetchRealDemGridForTrack(grid, controller.signal, track.spanMeters).then((g) => {
+      if (!controller.signal.aborted && g) {
+        setDemGrid(g);
+      }
+    });
+    return () => controller.abort();
+  }, [grid, track.spanMeters, mapReloadNonce]);
+
+  const activeDemGrid = useMemo(() => {
+    if (!demGrid) return null;
+    const sameBounds =
+      Math.abs(demGrid.northLat - grid.northLat) < 1e-6 &&
+      Math.abs(demGrid.southLat - grid.southLat) < 1e-6 &&
+      Math.abs(demGrid.westLon - grid.westLon) < 1e-6 &&
+      Math.abs(demGrid.eastLon - grid.eastLon) < 1e-6;
+    return sameBounds ? demGrid : null;
+  }, [demGrid, grid]);
+
+  // Report live canvas element to parent for 9:16 MediaRecorder export
+  useEffect(() => {
+    onCanvasReady?.(gl.domElement);
+    return () => onCanvasReady?.(null);
+  }, [gl, onCanvasReady]);
+
+  // Populate scene.environment once with PMREM RoomEnvironment for crisp PBR shading
+  useEffect(() => {
+    const pmrem = new THREE.PMREMGenerator(gl);
+    const roomEnv = new RoomEnvironment();
+    const envTarget = pmrem.fromScene(roomEnv, 0.04);
+    scene.environment = envTarget.texture;
+    roomEnv.dispose();
+
+    return () => {
+      scene.environment = null;
+      envTarget.dispose();
+      pmrem.dispose();
+    };
+  }, [gl, scene]);
+
+  // Build overshoot-free terrain-grounded 3D GPS route polyline matching real street geometry
+  const groundedPath = useMemo(
+    () =>
+      buildGroundedRoutePath(
+        track.points,
+        (xM, zM) => sampleTerrainY(xM, zM, track, activeDemGrid),
+        { heightOffsetM: 0.22 },
+      ),
+    [track, activeDemGrid],
+  );
+
+  const finishThreshold = includeFinishPose ? 0.88 : 1.0;
+  const routeProgress = THREE.MathUtils.clamp(timelineProgress / finishThreshold, 0, 1);
+  const isFinishPhase =
+    mapConfig.cameraMode === 'finish-pose' ||
+    (includeFinishPose && timelineProgress >= finishThreshold);
+
+  const characterSizeFactor =
+    runner.characterSize === 'small'
+      ? 0.55
+      : runner.characterSize === 'large'
+        ? 1.18
+        : 0.82;
+
+  const runnerScale = useMemo(
+    () => Math.max(1.9, Math.min(11.0, track.spanMeters * 0.0056 * characterSizeFactor)),
+    [track.spanMeters, characterSizeFactor],
+  );
+
+  // Sample runner world position & facing yaw by cumulative distance along grounded route
+  const { runnerPos, runnerYaw } = useMemo(() => {
+    const sampled = sampleGroundedRouteAtProgress(groundedPath, routeProgress);
+    return { runnerPos: sampled.position, runnerYaw: sampled.yawRad };
+  }, [groundedPath, routeProgress]);
+
+  // Pre-allocated camera scratch vectors (zero allocation inside useFrame)
+  const camTargetPosRef = useRef(new THREE.Vector3());
+  const camLookTargetRef = useRef(new THREE.Vector3());
+  const smoothLookAtRef = useRef(new THREE.Vector3(runnerPos.x, runnerPos.y, runnerPos.z));
+  const initializedCamRef = useRef(false);
+  const prevScrubProgressRef = useRef(timelineProgress);
+  const prevModeRef = useRef(mapConfig.cameraMode);
+
+  // Reset camera smoothly when loading a different track
+  useEffect(() => {
+    initializedCamRef.current = false;
+  }, [track.id]);
+
+  useFrame((state, delta) => {
+    const dt = Math.min(0.05, delta);
+
+    const effectiveMode = resolveEffectiveCameraMode(
+      mapConfig.cameraMode,
+      timelineProgress,
+      isFinishPhase,
+    );
+
+    const zoom = THREE.MathUtils.clamp(mapConfig.cameraZoom ?? 1.0, 0.5, 2.5);
+    const visualHeight = Math.max(10, runnerScale * 1.85);
+
+    const overviewHeight = Math.max(165, Math.min(920, track.spanMeters * 0.68)) * zoom;
+    const overviewDist = Math.max(135, Math.min(720, track.spanMeters * 0.52)) * zoom;
+    const droneHeight = Math.max(46, Math.min(115, track.spanMeters * 0.062)) * zoom;
+    const droneBackDist = droneHeight * 0.54; // ~61deg wide aerial chase
+
+    if (effectiveMode === 'overview') {
+      const orbitAngle =
+        mapConfig.cameraMode === 'auto'
+          ? -0.45 + (timelineProgress / 0.08) * 0.35
+          : state.clock.elapsedTime * 0.08;
+      camTargetPosRef.current.set(
+        Math.sin(orbitAngle) * overviewDist,
+        overviewHeight,
+        Math.cos(orbitAngle) * overviewDist,
+      );
+      camLookTargetRef.current.set(0, track.maxElevationM * 0.25, 0);
+    } else if (effectiveMode === 'follow-chase') {
+      // Screenshot-style oblique 3/4 trailing street chase (~57 deg downward pitch with clear runner & road corridor)
+      const chaseHeight = Math.max(46, visualHeight * 4.4) * zoom;
+      const chaseBackDist = chaseHeight * 0.62;
+      const trailAngle = runnerYaw + Math.PI * 0.95;
+      const camX = runnerPos.x + Math.sin(trailAngle) * chaseBackDist;
+      const camZ = runnerPos.z + Math.cos(trailAngle) * chaseBackDist;
+      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
+      camTargetPosRef.current.set(
+        camX,
+        Math.max(runnerPos.y + chaseHeight, terrainFloorY),
+        camZ,
+      );
+      // Look ahead of runner so avatar sits cleanly in lower-mid frame above bottom HUD
+      camLookTargetRef.current.set(
+        runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 3.8),
+        runnerPos.y + runnerScale * 0.4,
+        runnerPos.z + Math.cos(runnerYaw) * (runnerScale * 3.8),
+      );
+    } else if (effectiveMode === 'birds-eye') {
+      // High-altitude top-down Strava/Relive style (~79 deg downward pitch) with spacious map context
+      const birdsHeight =
+        Math.max(95, Math.min(270, Math.max(visualHeight * 10.5, track.spanMeters * 0.14))) * zoom;
+      const birdsBackDist = birdsHeight * 0.19;
+      const trailAngle = runnerYaw + Math.PI * 0.92;
+      const camX = runnerPos.x + Math.sin(trailAngle) * birdsBackDist;
+      const camZ = runnerPos.z + Math.cos(trailAngle) * birdsBackDist;
+      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 12;
+      camTargetPosRef.current.set(
+        camX,
+        Math.max(runnerPos.y + birdsHeight, terrainFloorY),
+        camZ,
+      );
+      camLookTargetRef.current.set(
+        runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 2.2),
+        runnerPos.y + runnerScale * 0.4,
+        runnerPos.z + Math.cos(runnerYaw) * (runnerScale * 2.2),
+      );
+    } else if (effectiveMode === 'drone-180') {
+      // Smooth 180° horizontal orbital sweep (-90° to +90°) around runner with terrain floor clearance
+      const orbitSweep =
+        Math.sin(timelineProgress * Math.PI * 2.5 + state.clock.elapsedTime * 0.22) *
+        (Math.PI * 0.5);
+      const orbitAngle = runnerYaw + Math.PI * 0.5 + orbitSweep;
+      const orbitDist = Math.max(visualHeight * 3.6, Math.min(82, track.spanMeters * 0.052)) * zoom;
+      const orbitHeight = Math.max(visualHeight * 2.0, Math.min(44, track.spanMeters * 0.028)) * zoom;
+      const camX = runnerPos.x + Math.sin(orbitAngle) * orbitDist;
+      const camZ = runnerPos.z + Math.cos(orbitAngle) * orbitDist;
+      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 6;
+      camTargetPosRef.current.set(
+        camX,
+        Math.max(runnerPos.y + orbitHeight, terrainFloorY),
+        camZ,
+      );
+      camLookTargetRef.current.set(
+        runnerPos.x,
+        runnerPos.y + runnerScale * 0.95,
+        runnerPos.z,
+      );
+    } else if (effectiveMode === 'follow-20m') {
+      // Calibrated spacious overhead tracking camera relative to runner visual height + user zoom
+      const baseAngle =
+        mapConfig.camera20mAngle === 'front'
+          ? runnerYaw
+          : mapConfig.camera20mAngle === 'side'
+            ? runnerYaw + Math.PI * 0.5
+            : mapConfig.camera20mAngle === 'orbit'
+              ? runnerYaw + Math.PI + timelineProgress * Math.PI * 4 + state.clock.elapsedTime * 0.45
+              : runnerYaw + Math.PI;
+      const horizDist = Math.max(36, visualHeight * 4.6) * zoom;
+      const aerialHeight = Math.max(28, visualHeight * 3.8) * zoom;
+      const camX = runnerPos.x + Math.sin(baseAngle) * horizDist;
+      const camZ = runnerPos.z + Math.cos(baseAngle) * horizDist;
+      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
+      camTargetPosRef.current.set(
+        camX,
+        Math.max(runnerPos.y + aerialHeight, terrainFloorY),
+        camZ,
+      );
+      camLookTargetRef.current.set(
+        runnerPos.x,
+        runnerPos.y + runnerScale * 0.8,
+        runnerPos.z,
+      );
+    } else if (effectiveMode === 'finish-pose') {
+      // Front-facing hero view directly in front of the avatar cleanly framed between top FINISH banner and bottom HUD
+      const finishZoom = THREE.MathUtils.clamp(zoom, 0.75, 1.55);
+      const orbitOffset = Math.sin(state.clock.elapsedTime * 0.65) * 0.12;
+      const frontAngle = runnerYaw + orbitOffset;
+      const heroDist = runnerScale * 8.2 * finishZoom;
+      const heroHeight = runnerScale * 2.55 * finishZoom;
+      camTargetPosRef.current.set(
+        runnerPos.x + Math.sin(frontAngle) * heroDist,
+        runnerPos.y + heroHeight,
+        runnerPos.z + Math.cos(frontAngle) * heroDist,
+      );
+      camLookTargetRef.current.set(
+        runnerPos.x,
+        runnerPos.y + runnerScale * 1.68,
+        runnerPos.z,
+      );
+    } else {
+      // Aerial Drone View ~61° tracking runner with clear forward route framing
+      const trailAngle = runnerYaw + Math.PI * 0.86;
+      const camX = runnerPos.x + Math.sin(trailAngle) * droneBackDist;
+      const camZ = runnerPos.z + Math.cos(trailAngle) * droneBackDist;
+      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
+      camTargetPosRef.current.set(
+        camX,
+        Math.max(runnerPos.y + droneHeight, terrainFloorY),
+        camZ,
+      );
+      camLookTargetRef.current.set(
+        runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 2.2),
+        runnerPos.y + runnerScale * 0.75,
+        runnerPos.z + Math.cos(runnerYaw) * (runnerScale * 2.2),
+      );
+    }
+
+    // Smoothly widen vertical FOV in overhead/top-down modes for richer 9:16 lateral street context
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const targetFov =
+        effectiveMode === 'follow-20m' || effectiveMode === 'birds-eye' ? 52 : 45;
+      if (Math.abs(camera.fov - targetFov) > 0.05) {
+        camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 4.5, dt);
+        camera.updateProjectionMatrix();
+      }
+    }
+
+    const jumpedWhilePaused =
+      !isPlaying &&
+      (Math.abs(timelineProgress - prevScrubProgressRef.current) > 0.08 ||
+        mapConfig.cameraMode !== prevModeRef.current);
+    prevScrubProgressRef.current = timelineProgress;
+    prevModeRef.current = mapConfig.cameraMode;
+
+    if (!initializedCamRef.current || jumpedWhilePaused) {
+      camera.position.copy(camTargetPosRef.current);
+      smoothLookAtRef.current.copy(camLookTargetRef.current);
+      camera.lookAt(smoothLookAtRef.current);
+      initializedCamRef.current = true;
+    } else {
+      const lambda =
+        effectiveMode === 'overview' || effectiveMode === 'birds-eye'
+          ? 3.4
+          : effectiveMode === 'finish-pose'
+            ? 4.0
+            : effectiveMode === 'drone-180' || effectiveMode === 'follow-20m'
+              ? 4.6
+              : 5.5;
+      camera.position.x = THREE.MathUtils.damp(
+        camera.position.x,
+        camTargetPosRef.current.x,
+        lambda,
+        dt,
+      );
+      camera.position.y = THREE.MathUtils.damp(
+        camera.position.y,
+        camTargetPosRef.current.y,
+        lambda,
+        dt,
+      );
+      camera.position.z = THREE.MathUtils.damp(
+        camera.position.z,
+        camTargetPosRef.current.z,
+        lambda,
+        dt,
+      );
+
+      smoothLookAtRef.current.x = THREE.MathUtils.damp(
+        smoothLookAtRef.current.x,
+        camLookTargetRef.current.x,
+        lambda + 1.5,
+        dt,
+      );
+      smoothLookAtRef.current.y = THREE.MathUtils.damp(
+        smoothLookAtRef.current.y,
+        camLookTargetRef.current.y,
+        lambda + 1.5,
+        dt,
+      );
+      smoothLookAtRef.current.z = THREE.MathUtils.damp(
+        smoothLookAtRef.current.z,
+        camLookTargetRef.current.z,
+        lambda + 1.5,
+        dt,
+      );
+      camera.lookAt(smoothLookAtRef.current);
+    }
+
+    // Keep tight directional shadow frustum tracking runner for crisp grounded shadows
+    if (keyLightRef.current) {
+      keyLightRef.current.position.set(
+        runnerPos.x + mood.keyPos[0] * 0.55,
+        runnerPos.y + mood.keyPos[1] * 0.55,
+        runnerPos.z + mood.keyPos[2] * 0.55,
+      );
+      keyLightRef.current.target.position.copy(runnerPos);
+      keyLightRef.current.target.updateMatrixWorld();
+    }
+  });
+
+  return (
+    <>
+      <color attach="background" args={[mood.sky]} />
+      <fogExp2 attach="fog" args={[mood.fog, mood.fogDensity]} />
+
+      <hemisphereLight args={[mood.hemiSky, mood.hemiGround, mood.hemiIntensity]} />
+
+      <directionalLight
+        ref={keyLightRef}
+        color={mood.keyColor}
+        intensity={mood.keyIntensity}
+        position={mood.keyPos}
+        castShadow
+        shadow-mapSize={[1024, 1024]}
+        shadow-camera-near={10}
+        shadow-camera-far={420}
+        shadow-camera-left={-48}
+        shadow-camera-right={48}
+        shadow-camera-top={48}
+        shadow-camera-bottom={-48}
+        shadow-bias={-0.0003}
+        shadow-normalBias={0.04}
+      />
+
+      {/* Rim backlight to separate silhouette cleanly in evening/night moods */}
+      <directionalLight
+        color={mood.rimColor}
+        intensity={mood.rimIntensity}
+        position={[-140, 90, -160]}
+      />
+
+      <TerrainMap3D
+        key={track.id}
+        track={track}
+        grid={grid}
+        demGrid={activeDemGrid}
+        mapStyle={mapConfig.mapStyle}
+        routeStyle={mapConfig.routeStyle ?? 'google-maps'}
+        buildings3d={mapConfig.buildings3d}
+        overlayRelief={mapConfig.overlayRelief ?? true}
+        overlaySurface={mapConfig.overlaySurface ?? true}
+        overlayLabels={mapConfig.overlayLabels ?? true}
+        resolvedMood={resolvedMood}
+        jerseyColor={runner.jerseyColor}
+        routeProgress={routeProgress}
+        groundedPath={groundedPath}
+        mapReloadNonce={mapReloadNonce}
+        onMapLoadStatus={onMapLoadStatus}
+      />
+
+      {runner.characterStyle === 'custom-glb' && runner.customModelUrl ? (
+        <CustomGlbRunner3D
+          config={runner}
+          position={runnerPos}
+          yawRad={runnerYaw}
+          scale={runnerScale}
+          cadenceSpm={currentCadence}
+          paceSecPerKm={currentPaceSec}
+          isPlaying={isPlaying}
+          isFinishPose={isFinishPhase}
+          includeFinishPose={includeFinishPose}
+          isManualFinishCamera={mapConfig.cameraMode === 'finish-pose'}
+          timelineProgress={timelineProgress}
+          onStatusChange={onCustomModelStatus}
+        />
+      ) : runner.characterStyle === 'realistic' || runner.characterStyle === 'custom-glb' ? (
+        <RealisticRunner3D
+          config={runner}
+          position={runnerPos}
+          yawRad={runnerYaw}
+          scale={runnerScale}
+          cadenceSpm={currentCadence}
+          paceSecPerKm={currentPaceSec}
+          isPlaying={isPlaying}
+          isFinishPose={isFinishPhase}
+          includeFinishPose={includeFinishPose}
+          isManualFinishCamera={mapConfig.cameraMode === 'finish-pose'}
+          timelineProgress={timelineProgress}
+          isNightMood={isNightMood}
+        />
+      ) : (
+        <ChibiRunner3D
+          config={runner}
+          position={runnerPos}
+          yawRad={runnerYaw}
+          scale={runnerScale}
+          cadenceSpm={currentCadence}
+          paceSecPerKm={currentPaceSec}
+          isPlaying={isPlaying}
+          isFinishPose={isFinishPhase}
+          includeFinishPose={includeFinishPose}
+          isManualFinishCamera={mapConfig.cameraMode === 'finish-pose'}
+          timelineProgress={timelineProgress}
+          isNightMood={isNightMood}
+        />
+      )}
+    </>
+  );
+};
+
+export const Studio3DCanvas: React.FC<Studio3DCanvasProps> = (props) => {
+  const isSoftwareGl = useMemo(() => detectSoftwareWebGL(), []);
+  const [contextLost, setContextLost] = useState(false);
+
+  return (
+    <WebGLErrorBoundary>
+      {contextLost ? (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-200 p-6 text-center gap-3">
+          <p className="text-xs font-medium">Konteks WebGL terputus. Klik muat ulang kanvas 3D.</p>
+          <button
+            type="button"
+            onClick={() => setContextLost(false)}
+            className="px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold cursor-pointer"
+          >
+            Muat Ulang 3D
+          </button>
+        </div>
+      ) : (
+        <Canvas
+          shadows={!isSoftwareGl}
+          dpr={isSoftwareGl ? 1 : [1, 2]}
+          camera={{ fov: 44, near: 1.5, far: 4500, position: [0, 120, 140] }}
+          gl={{
+            preserveDrawingBuffer: true,
+            antialias: !isSoftwareGl,
+            powerPreference: 'high-performance',
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1.0,
+          }}
+          onCreated={({ gl }) => {
+            gl.domElement.addEventListener(
+              'webglcontextlost',
+              (e) => {
+                e.preventDefault();
+                setContextLost(true);
+              },
+              false,
+            );
+          }}
+        >
+          <SceneContent {...props} />
+        </Canvas>
+      )}
+    </WebGLErrorBoundary>
+  );
+};
+
+
+==================== src/components/studio3d/Studio3DView.tsx ====================
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Camera,
+  Compass,
+  Eye,
+  FileUp,
+  History,
+  Navigation,
+  Orbit,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Video,
+  Volume2,
+  VolumeX,
+  ZoomIn,
+} from 'lucide-react';
+import type { AthleteUser, RunLog } from '../../types';
+import {
+  DEFAULT_EXPORT_CONFIG,
+  DEFAULT_MAP_CONFIG,
+  DEFAULT_RUNNER_CONFIG,
+  normalizeMapStyle3D,
+  type Camera20mAngle,
+  type CameraMode3D,
+  type CanonicalMapStyle3D,
+  type CharacterSize3D,
+  type ExportConfig,
+  type MapConfig,
+  type MapLoadStatus,
+  type RunnerConfig,
+  type Studio3DTrack,
+} from '../../types/studio3d';
+import { parseFitArrayBuffer } from '../../utils/fitParser';
+import { getTranslations, type Language } from '../../utils/i18n';
+import { formatDuration, formatPace } from '../../utils/runParser';
+import {
+  deleteSavedGlbAvatar,
+  formatAvatarSizeMb,
+  getDefaultSavedGlbAvatar,
+  getSavedGlbAvatar,
+  isSupportedGlbFilename,
+  listSavedGlbAvatars,
+  replaceGlbAvatar,
+  saveGlbAvatar,
+  updateSavedGlbAvatarSettings,
+  type SavedGlbAvatarSummary,
+} from '../../utils/studio3dAvatarStorage';
+import { Studio3DAudioEngine } from '../../utils/studio3dAudio';
+import {
+  computeMiniMapGeometry,
+  computeStartFinishBannerState,
+  getExportDurationSec,
+  recordStudio3DVideo,
+  sampleTrackTelemetryAtProgress,
+} from '../../utils/studio3dExporter';
+import { sampleTrackPointByDistance } from '../../utils/studio3dGpsEngine';
+import {
+  createTrackFromRunLog,
+  fetchRoadSnappedTrack,
+  parseGpxToStudio3DTrack,
+  pickInitialGpsTrackFromRuns,
+} from '../../utils/studio3dTrack';
+import type { CustomGlbStatus } from './CustomGlbRunner3D';
+import { Studio3DCanvas } from './Studio3DCanvas';
+import { Studio3DPanelTabs, type Studio3DTab } from './Studio3DPanelTabs';
+
+interface Studio3DViewProps {
+  runs: RunLog[];
+  user?: AthleteUser;
+  lang: Language;
+  isGuest?: boolean;
+  onRequestSignIn?: () => void;
+}
+
+const INITIAL_MAP_LOAD_STATUS: MapLoadStatus = {
+  phase: 'loading',
+  loadedTiles: 0,
+  failedTiles: 0,
+  totalTiles: 25,
+  zoom: 15,
+};
+
+export const Studio3DView: React.FC<Studio3DViewProps> = ({
+  runs,
+  user,
+  lang,
+  isGuest = false,
+  onRequestSignIn,
+}) => {
+  const t3d = getTranslations(lang).public3d;
+  const initialPicked = useMemo(
+    () =>
+      pickInitialGpsTrackFromRuns(runs, user?.biodata.city || 'Indonesia', {
+        restingHr: user?.biodata.restingHr,
+        maxHr: user?.biodata.maxHr,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const [track, setTrack] = useState<Studio3DTrack | null>(() => initialPicked?.track ?? null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>(
+    () => initialPicked?.runId ?? '',
+  );
+  const [activeTab, setActiveTab] = useState<Studio3DTab>('pelari');
+  const [runner, setRunner] = useState<RunnerConfig>(() => ({
+    ...DEFAULT_RUNNER_CONFIG,
+    runnerName: user?.biodata.fullName || user?.username || DEFAULT_RUNNER_CONFIG.runnerName,
+  }));
+  const [mapConfig, setMapConfig] = useState<MapConfig>(DEFAULT_MAP_CONFIG);
+  const [exportConfig, setExportConfig] = useState<ExportConfig>(DEFAULT_EXPORT_CONFIG);
+  const [mapReloadNonce, setMapReloadNonce] = useState(0);
+  const [mapLoadStatus, setMapLoadStatus] = useState<MapLoadStatus>(INITIAL_MAP_LOAD_STATUS);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0); // 0..1
+  const [muted, setMuted] = useState(false);
+  const [inputError, setInputError] = useState<string | null>(null);
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportPercent, setExportPercent] = useState(0);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [lastExportInfo, setLastExportInfo] = useState<{ filename: string; sizeMb: string } | null>(
+    null,
+  );
+  const [customModelStatus, setCustomModelStatus] = useState<CustomGlbStatus>({
+    loading: false,
+    error: null,
+    animationCount: 0,
+    hasLocomotionClip: false,
+    rigMode: 'static',
+    detectedBones: 0,
+  });
+  const [savedAvatars, setSavedAvatars] = useState<SavedGlbAvatarSummary[]>([]);
+  const [activeSavedAvatarId, setActiveSavedAvatarId] = useState<string | null>(null);
+  const [avatarStorageNotice, setAvatarStorageNotice] = useState<string | null>(null);
+  const [snappedTrack, setSnappedTrack] = useState<Studio3DTrack | null>(null);
+  const [routeSnapStatus, setRouteSnapStatus] = useState<
+    'idle' | 'matching' | 'matched' | 'fallback'
+  >('idle');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const audioEngineRef = useRef<Studio3DAudioEngine | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
+  const activeModelBlobRef = useRef<Blob | null>(null);
+  const snappedTrackCacheRef = useRef<Map<string, Studio3DTrack>>(new Map());
+  const hasAutoPickedGpsRef = useRef(Boolean(initialPicked));
+  const latestBlobUrlsRef = useRef<{ audio: string | null; model: string | null }>({
+    audio: null,
+    model: null,
+  });
+
+  useEffect(() => {
+    latestBlobUrlsRef.current = {
+      audio: exportConfig.customAudioUrl,
+      model: runner.customModelUrl,
+    };
+  }, [exportConfig.customAudioUrl, runner.customModelUrl]);
+
+  const getAudioEngine = useCallback(() => {
+    if (!audioEngineRef.current) {
+      audioEngineRef.current = new Studio3DAudioEngine();
+    }
+    return audioEngineRef.current;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      exportAbortRef.current?.abort();
+      audioEngineRef.current?.dispose();
+      if (latestBlobUrlsRef.current.audio?.startsWith('blob:')) {
+        URL.revokeObjectURL(latestBlobUrlsRef.current.audio);
+      }
+      if (latestBlobUrlsRef.current.model?.startsWith('blob:')) {
+        URL.revokeObjectURL(latestBlobUrlsRef.current.model);
+      }
+    };
+  }, []);
+
+  // Auto-pick newest GPS run once when runs load asynchronously from server/Firestore
+  useEffect(() => {
+    if (track || hasAutoPickedGpsRef.current || runs.length === 0) return;
+    const picked = pickInitialGpsTrackFromRuns(runs, user?.biodata.city || 'Indonesia', {
+      restingHr: user?.biodata.restingHr,
+      maxHr: user?.biodata.maxHr,
+    });
+    if (picked) {
+      hasAutoPickedGpsRef.current = true;
+      setSelectedHistoryId(picked.runId);
+      setTrack(picked.track);
+      setMapLoadStatus(INITIAL_MAP_LOAD_STATUS);
+      setMapReloadNonce((n) => n + 1);
+    }
+  }, [runs, track, user?.biodata.city, user?.biodata.restingHr, user?.biodata.maxHr]);
+
+  // Sync runnerName once user profile hydrates asynchronously (e.g. direct visit to /3D/)
+  useEffect(() => {
+    const resolvedName = user?.biodata.fullName || user?.username;
+    if (!resolvedName) return;
+    setRunner((prev) =>
+      prev.runnerName === DEFAULT_RUNNER_CONFIG.runnerName
+        ? { ...prev, runnerName: resolvedName }
+        : prev,
+    );
+  }, [user?.biodata.fullName, user?.username]);
+
+  // Restore saved .GLB avatars from persistent IndexedDB on mount
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [summaries, defaultRec] = await Promise.all([
+          listSavedGlbAvatars(),
+          getDefaultSavedGlbAvatar(),
+        ]);
+        if (cancelled) return;
+        setSavedAvatars(summaries);
+        if (defaultRec) {
+          const url = URL.createObjectURL(defaultRec.blob);
+          activeModelBlobRef.current = defaultRec.blob;
+          setActiveSavedAvatarId(defaultRec.id);
+          setRunner((prev) => {
+            if (prev.customModelUrl && prev.customModelUrl.startsWith('blob:')) {
+              URL.revokeObjectURL(prev.customModelUrl);
+            }
+            return {
+              ...prev,
+              characterStyle: 'custom-glb',
+              customModelUrl: url,
+              customModelName: defaultRec.name,
+              customModelFlip180: defaultRec.flip180,
+              customModelAnimMode: defaultRec.animMode,
+            };
+          });
+        }
+      } catch {
+        // Ignore IndexedDB unavailability in restricted private contexts
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const engine = audioEngineRef.current;
+    if (!engine) return;
+    const effectiveVol = muted ? 0 : exportConfig.volume;
+    void engine.configure(exportConfig.musicPreset, exportConfig.customAudioUrl, effectiveVol);
+  }, [exportConfig.musicPreset, exportConfig.customAudioUrl, exportConfig.volume, muted]);
+
+  useEffect(() => {
+    if (!isPlaying || isExporting || !track) return;
+
+    const totalSec = getExportDurationSec(exportConfig);
+    let lastTs = performance.now();
+    let rafId = 0;
+
+    const tick = (now: number) => {
+      const dtSec = Math.min(0.1, (now - lastTs) / 1000);
+      lastTs = now;
+      setProgress((prev) => {
+        const next = prev + dtSec / totalSec;
+        if (next >= 1) {
+          setIsPlaying(false);
+          audioEngineRef.current?.stop();
+          return 1;
+        }
+        return next;
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isPlaying, isExporting, exportConfig, track]);
+
+  useEffect(() => {
+    if (!track || (mapConfig.routeSnapMode ?? 'raw') !== 'snap-road') {
+      setSnappedTrack(null);
+      setRouteSnapStatus('idle');
+      return;
+    }
+    const cached = snappedTrackCacheRef.current.get(track.id);
+    if (cached) {
+      setSnappedTrack(cached);
+      setRouteSnapStatus('matched');
+      return;
+    }
+
+    const controller = new AbortController();
+    setRouteSnapStatus('matching');
+    void fetchRoadSnappedTrack(track, controller.signal).then((res) => {
+      if (controller.signal.aborted) return;
+      if (res.matched) {
+        snappedTrackCacheRef.current.set(track.id, res.track);
+        setSnappedTrack(res.track);
+        setRouteSnapStatus('matched');
+      } else {
+        setSnappedTrack(null);
+        setRouteSnapStatus('fallback');
+      }
+    });
+    return () => controller.abort();
+  }, [track, mapConfig.routeSnapMode]);
+
+  const activeTrack = useMemo(() => {
+    if (!track) return null;
+    if ((mapConfig.routeSnapMode ?? 'raw') === 'snap-road' && snappedTrack?.id === track.id) {
+      return {
+        ...snappedTrack,
+        title: track.title,
+        date: track.date,
+        location: track.location,
+        landmarks: track.landmarks,
+      };
+    }
+    return track;
+  }, [track, snappedTrack, mapConfig.routeSnapMode]);
+
+  const liveTelemetry = useMemo(
+    () =>
+      activeTrack
+        ? sampleTrackTelemetryAtProgress(activeTrack, progress, exportConfig.includeFinishPose)
+        : null,
+    [activeTrack, progress, exportConfig.includeFinishPose],
+  );
+
+  const bannerState = useMemo(
+    () => computeStartFinishBannerState(progress, exportConfig.includeFinishPose),
+    [progress, exportConfig.includeFinishPose],
+  );
+
+  const miniMap = useMemo(() => {
+    if (!activeTrack) return null;
+    const finishThreshold = exportConfig.includeFinishPose ? 0.88 : 1.0;
+    const routeP = Math.min(1, Math.max(0, progress / finishThreshold));
+    return computeMiniMapGeometry(activeTrack, routeP, 64, 9);
+  }, [activeTrack, progress, exportConfig.includeFinishPose]);
+
+  const handleTogglePlay = async () => {
+    if (isExporting || !track) return;
+    const engine = getAudioEngine();
+    if (isPlaying) {
+      setIsPlaying(false);
+      engine.stop();
+      return;
+    }
+
+    if (progress >= 0.995) {
+      setProgress(0);
+    }
+    setIsPlaying(true);
+    await engine.configure(
+      exportConfig.musicPreset,
+      exportConfig.customAudioUrl,
+      muted ? 0 : exportConfig.volume,
+    );
+    if (!muted && exportConfig.musicPreset !== 'none') {
+      await engine.start();
+    }
+  };
+
+  const handleRestart = async () => {
+    if (isExporting || !track) return;
+    setProgress(0);
+    setMapConfig((prev) => ({ ...prev, cameraMode: 'auto' }));
+    if (isPlaying) {
+      const engine = getAudioEngine();
+      engine.stop();
+      if (!muted && exportConfig.musicPreset !== 'none') {
+        await engine.start();
+      }
+    }
+  };
+
+  const handleSelectHistoryRun = (runId: string) => {
+    setSelectedHistoryId(runId);
+    if (!runId) return;
+    const found = runs.find((r) => r.id === runId);
+    if (!found) return;
+    hasAutoPickedGpsRef.current = true;
+    setInputError(null);
+    setIsPlaying(false);
+    audioEngineRef.current?.stop();
+    setProgress(0);
+    setMapLoadStatus(INITIAL_MAP_LOAD_STATUS);
+    setMapReloadNonce((n) => n + 1);
+    setTrack(
+      createTrackFromRunLog(found, user?.biodata.city || 'Indonesia', {
+        restingHr: user?.biodata.restingHr,
+        maxHr: user?.biodata.maxHr,
+      }),
+    );
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setInputError(null);
+    const lower = file.name.toLowerCase();
+    const bioHints = {
+      restingHr: user?.biodata.restingHr,
+      maxHr: user?.biodata.maxHr,
+    };
+    try {
+      let nextTrack: Studio3DTrack;
+      if (lower.endsWith('.fit')) {
+        const buffer = await file.arrayBuffer();
+        nextTrack = parseFitArrayBuffer(buffer, file.name, bioHints);
+      } else if (lower.endsWith('.gpx')) {
+        const text = await file.text();
+        nextTrack = parseGpxToStudio3DTrack(text, file.name, bioHints);
+      } else {
+        throw new Error('Format file harus .FIT atau .GPX.');
+      }
+
+      hasAutoPickedGpsRef.current = true;
+      setIsPlaying(false);
+      audioEngineRef.current?.stop();
+      setProgress(0);
+      setSelectedHistoryId('');
+      setMapLoadStatus(INITIAL_MAP_LOAD_STATUS);
+      setMapReloadNonce((n) => n + 1);
+      setTrack(nextTrack);
+    } catch (err) {
+      setInputError(
+        err instanceof Error ? err.message : 'Gagal membaca file .FIT / .GPX.',
+      );
+    }
+  };
+
+  const handleSelectGlbFile = async (file: File, replaceSavedId?: string) => {
+    setAvatarStorageNotice(null);
+    if (!isSupportedGlbFilename(file.name)) {
+      setAvatarStorageNotice('Format avatar harus .GLB atau .GLTF.');
+      return;
+    }
+
+    const blobUrl = URL.createObjectURL(file);
+    activeModelBlobRef.current = file;
+    setRunner((prev) => {
+      if (prev.customModelUrl && prev.customModelUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(prev.customModelUrl);
+      }
+      return {
+        ...prev,
+        characterStyle: 'custom-glb',
+        customModelUrl: blobUrl,
+        customModelName: file.name,
+      };
+    });
+
+    if (replaceSavedId) {
+      try {
+        const updated = await replaceGlbAvatar(replaceSavedId, file, {
+          name: file.name,
+          flip180: Boolean(runner.customModelFlip180),
+          animMode: runner.customModelAnimMode ?? 'auto',
+          makeDefault: true,
+        });
+        setActiveSavedAvatarId(updated.id);
+        setSavedAvatars(await listSavedGlbAvatars());
+        setAvatarStorageNotice(`Avatar diganti & disimpan: ${updated.name} (${formatAvatarSizeMb(updated.sizeBytes)})`);
+      } catch (err) {
+        setAvatarStorageNotice(
+          err instanceof Error ? err.message : 'Gagal mengganti avatar tersimpan.',
+        );
+      }
+    } else {
+      setActiveSavedAvatarId(null);
+      setAvatarStorageNotice(`Model aktif: ${file.name}. Klik Simpan Avatar agar tersimpan permanen.`);
+    }
+  };
+
+  const handleSaveCurrentGlbAvatar = async () => {
+    setAvatarStorageNotice(null);
+    if (!runner.customModelUrl) return;
+    try {
+      let blob = activeModelBlobRef.current;
+      if (!blob) {
+        const resp = await fetch(runner.customModelUrl);
+        blob = await resp.blob();
+        activeModelBlobRef.current = blob;
+      }
+
+      if (activeSavedAvatarId) {
+        const updated = await updateSavedGlbAvatarSettings(activeSavedAvatarId, {
+          flip180: Boolean(runner.customModelFlip180),
+          animMode: runner.customModelAnimMode ?? 'auto',
+          makeDefault: true,
+        });
+        if (updated) {
+          setSavedAvatars(await listSavedGlbAvatars());
+          setAvatarStorageNotice(`Pengaturan avatar "${updated.name}" diperbarui.`);
+          return;
+        }
+      }
+
+      const saved = await saveGlbAvatar(blob, {
+        name: runner.customModelName || 'Avatar_Pelari.glb',
+        flip180: Boolean(runner.customModelFlip180),
+        animMode: runner.customModelAnimMode ?? 'auto',
+        makeDefault: true,
+      });
+      setActiveSavedAvatarId(saved.id);
+      setSavedAvatars(await listSavedGlbAvatars());
+      setAvatarStorageNotice(`Avatar "${saved.name}" tersimpan (${formatAvatarSizeMb(saved.sizeBytes)}).`);
+    } catch (err) {
+      setAvatarStorageNotice(
+        err instanceof Error ? err.message : 'Gagal menyimpan avatar .GLB.',
+      );
+    }
+  };
+
+  const handleLoadSavedGlbAvatar = async (id: string) => {
+    setAvatarStorageNotice(null);
+    try {
+      const rec = await getSavedGlbAvatar(id);
+      if (!rec) {
+        setAvatarStorageNotice('Avatar tersimpan tidak ditemukan.');
+        return;
+      }
+      await updateSavedGlbAvatarSettings(id, { makeDefault: true });
+      const blobUrl = URL.createObjectURL(rec.blob);
+      activeModelBlobRef.current = rec.blob;
+      setActiveSavedAvatarId(rec.id);
+      setRunner((prev) => {
+        if (prev.customModelUrl && prev.customModelUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(prev.customModelUrl);
+        }
+        return {
+          ...prev,
+          characterStyle: 'custom-glb',
+          customModelUrl: blobUrl,
+          customModelName: rec.name,
+          customModelFlip180: rec.flip180,
+          customModelAnimMode: rec.animMode,
+        };
+      });
+      setSavedAvatars(await listSavedGlbAvatars());
+      setAvatarStorageNotice(`Memuat avatar "${rec.name}" (${formatAvatarSizeMb(rec.sizeBytes)}).`);
+    } catch (err) {
+      setAvatarStorageNotice(
+        err instanceof Error ? err.message : 'Gagal memuat avatar tersimpan.',
+      );
+    }
+  };
+
+  const handleDeleteSavedGlbAvatar = async (id: string) => {
+    setAvatarStorageNotice(null);
+    try {
+      await deleteSavedGlbAvatar(id);
+      const nextList = await listSavedGlbAvatars();
+      setSavedAvatars(nextList);
+      if (activeSavedAvatarId === id) {
+        setActiveSavedAvatarId(null);
+      }
+      setAvatarStorageNotice('Avatar dihapus dari daftar tersimpan.');
+    } catch (err) {
+      setAvatarStorageNotice(
+        err instanceof Error ? err.message : 'Gagal menghapus avatar tersimpan.',
+      );
+    }
+  };
+
+  const handleClearGlbModel = () => {
+    setAvatarStorageNotice(null);
+    activeModelBlobRef.current = null;
+    setActiveSavedAvatarId(null);
+    setRunner((prev) => {
+      if (prev.customModelUrl && prev.customModelUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(prev.customModelUrl);
+      }
+      return {
+        ...prev,
+        characterStyle: 'realistic',
+        customModelUrl: null,
+        customModelName: null,
+      };
+    });
+  };
+
+  const handleQuickCamera = (mode: CameraMode3D) => {
+    setMapConfig((prev) => ({ ...prev, cameraMode: mode }));
+    if (mode === 'finish-pose' && progress < 0.88) {
+      setProgress(exportConfig.includeFinishPose ? 0.92 : 0.99);
+    }
+  };
+
+  const handleReloadMap = useCallback(() => {
+    if (!track) return;
+    setMapLoadStatus(INITIAL_MAP_LOAD_STATUS);
+    setMapReloadNonce((n) => n + 1);
+  }, [track]);
+
+  const handleStartExport = async () => {
+    if (!activeTrack) return;
+    setExportError(null);
+    setLastExportInfo(null);
+    setIsPlaying(false);
+    audioEngineRef.current?.stop();
+
+    const abortController = new AbortController();
+    exportAbortRef.current = abortController;
+    setIsExporting(true);
+    setExportPercent(0);
+    setMapConfig((prev) => ({
+      ...prev,
+      cameraMode: prev.cameraMode === 'finish-pose' ? 'auto' : prev.cameraMode,
+    }));
+
+    try {
+      const engine = getAudioEngine();
+      const result = await recordStudio3DVideo({
+        getSourceCanvas: () => webglCanvasRef.current,
+        setProgress: (nextP) => setProgress(nextP),
+        audioEngine: engine,
+        track: activeTrack,
+        runner,
+        exportConfig: {
+          ...exportConfig,
+          volume: muted ? 0 : exportConfig.volume,
+        },
+        onPercent: (pct) => setExportPercent(pct),
+        abortSignal: abortController.signal,
+      });
+
+      const url = URL.createObjectURL(result.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+      setLastExportInfo({
+        filename: result.filename,
+        sizeMb: (result.blob.size / (1024 * 1024)).toFixed(2),
+      });
+    } catch (err) {
+      if (!abortController.signal.aborted) {
+        setExportError(
+          err instanceof Error ? err.message : 'Gagal mengekspor video 9:16.',
+        );
+      }
+    } finally {
+      setIsExporting(false);
+      exportAbortRef.current = null;
+    }
+  };
+
+  const handleCancelExport = () => {
+    exportAbortRef.current?.abort();
+    audioEngineRef.current?.stop();
+    setIsExporting(false);
+  };
+
+  const isMapLoading = mapLoadStatus.phase === 'loading';
+
+  return (
+    <div data-testid="view-studio3d" className="space-y-4">
+      {/* Compact Header Bar: Judul, Ringkasan Satu Baris & Sumber Rute */}
+      <header className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3.5 sm:px-5 shadow-xs space-y-2.5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div className="min-w-0 space-y-0.5">
+            <h1 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate">
+              {track ? `Studio Animasi 3D · ${track.title}` : 'Studio Animasi 3D'}
+            </h1>
+            {track ? (
+              <p
+                data-testid="studio3d-top-summary"
+                className="font-mono-tabular text-xs font-medium text-slate-600 dark:text-slate-300 flex flex-wrap items-center gap-x-2 gap-y-0.5"
+              >
+                <span className="font-bold text-slate-900 dark:text-white">
+                  {track.totalDistanceKm.toFixed(2)} km
+                </span>
+                <span className="text-slate-300 dark:text-slate-600">·</span>
+                <span>{formatDuration(track.totalDurationSec)}</span>
+                <span className="text-slate-300 dark:text-slate-600">·</span>
+                <span>{formatPace(track.avgPaceSecPerKm)} /km</span>
+                <span className="text-slate-300 dark:text-slate-600">·</span>
+                <span>{track.avgHr} bpm</span>
+                <span className="text-slate-300 dark:text-slate-600">·</span>
+                <span>{track.avgCadence} spm</span>
+                <span className="text-slate-300 dark:text-slate-600">·</span>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  +{track.elevationGainM} m
+                </span>
+              </p>
+            ) : (
+              <p
+                data-testid="studio3d-top-summary"
+                className="text-xs font-medium text-slate-500 dark:text-slate-400"
+              >
+                {isGuest ? (
+                  <>
+                    {t3d.guestUploadHint}
+                    {onRequestSignIn && (
+                      <>
+                        {' '}
+                        <button
+                          type="button"
+                          onClick={onRequestSignIn}
+                          className="text-blue-600 dark:text-blue-400 hover:underline font-semibold cursor-pointer"
+                        >
+                          {t3d.signInBtn}
+                        </button>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Upload file <strong>.FIT / .GPX</strong> atau pilih riwayat lari untuk merender peta dunia nyata 3D.
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".fit,.gpx"
+              className="hidden"
+              data-testid="studio3d-file-input"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleFileUpload(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              data-testid="studio3d-upload-btn"
+              onClick={() => fileInputRef.current?.click()}
+              className="h-8 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+            >
+              <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Upload .FIT / .GPX</span>
+            </button>
+
+            {runs.length > 0 && (
+              <div className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950">
+                <History className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
+                <select
+                  aria-label="Pilih dari Riwayat Lari"
+                  value={selectedHistoryId}
+                  onChange={(e) => handleSelectHistoryRun(e.target.value)}
+                  className="bg-transparent text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none max-w-[180px] cursor-pointer"
+                >
+                  <option value="">Riwayat Lari...</option>
+                  {runs.slice(0, 25).map((r) => {
+                    const hasGps = Array.isArray(r.telemetryPoints) && r.telemetryPoints.length >= 2;
+                    return (
+                      <option key={r.id} value={r.id} className="dark:bg-slate-900">
+                        {r.date} · {r.distanceKm.toFixed(2)}km ({r.paceStr}){hasGps ? ' [GPS]' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {inputError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-3 py-2 text-xs font-medium text-rose-700 dark:text-rose-300"
+          >
+            {inputError}
+          </div>
+        )}
+      </header>
+
+      {/* TOP STAGE: 9:16 3D Preview + Load Map + Playback & Camera Controls */}
+      <section
+        data-testid="studio3d-preview-stage"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col items-center gap-3.5"
+      >
+        {/* Map Status & Explicit Muat Peta Action Bar */}
+        <div className="w-full max-w-[780px] flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+          <div
+            data-testid="studio3d-map-status"
+            className="font-mono-tabular text-[11px] font-medium text-slate-600 dark:text-slate-300 flex items-center gap-2"
+          >
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                !track
+                  ? 'bg-slate-400'
+                  : isMapLoading
+                    ? 'bg-amber-500'
+                    : mapLoadStatus.phase === 'ready'
+                      ? 'bg-emerald-500'
+                      : mapLoadStatus.phase === 'partial'
+                        ? 'bg-amber-500'
+                        : 'bg-rose-500'
+              }`}
+            />
+            <span>
+              {!track
+                ? 'Menunggu file .FIT / .GPX atau riwayat lari GPS'
+                : isMapLoading
+                  ? `Memuat Peta Asli ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} (z${mapLoadStatus.zoom})...`
+                  : mapLoadStatus.phase === 'ready'
+                    ? `Peta Asli z${mapLoadStatus.zoom} · ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} tile`
+                    : mapLoadStatus.phase === 'partial'
+                      ? `Peta Parsial ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} (${mapLoadStatus.failedTiles} gagal)`
+                      : 'Peta gagal dimuat · coba Muat Peta'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <select
+              aria-label="Layer Peta 3D"
+              data-testid="studio3d-quick-mapstyle"
+              value={normalizeMapStyle3D(mapConfig.mapStyle)}
+              onChange={(e) => {
+                const nextStyle = e.target.value as CanonicalMapStyle3D;
+                setMapConfig((prev) => ({
+                  ...prev,
+                  mapStyle: nextStyle,
+                  buildings3d:
+                    nextStyle === 'city3d' || nextStyle === 'liberty' ? true : prev.buildings3d,
+                }));
+              }}
+              className="h-7 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-[11px] font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="standard">Peta: Street</option>
+              <option value="liberty">Peta: Liberty (OpenFreeMap)</option>
+              <option value="satellite">Peta: Satellite</option>
+              <option value="terrain">Peta: Terrain</option>
+              <option value="monochrome">Peta: Monochrome</option>
+              <option value="hybrid">Peta: Hybrid</option>
+              <option value="city3d">Peta: 3D City</option>
+            </select>
+
+            <button
+              type="button"
+              data-testid="studio3d-reload-map-btn"
+              disabled={!track}
+              onClick={handleReloadMap}
+              className="h-7 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 dark:text-slate-100 text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3 h-3 text-blue-600 dark:text-blue-400 ${
+                  track && isMapLoading ? 'animate-spin' : ''
+                }`}
+                aria-hidden="true"
+              />
+              <span>{track && isMapLoading ? 'Memuat Peta...' : 'Muat Peta'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Phone Hardware Frame (Strict 9:16 Aspect Ratio centered at Top) */}
+        <div className="w-full max-w-[350px] sm:max-w-[370px] rounded-[36px] p-2.5 bg-slate-900 dark:bg-slate-800 border-4 border-slate-800 dark:border-slate-700 shadow-2xl">
+          <div
+            data-testid="studio3d-phone-screen"
+            className="relative w-full aspect-[9/16] rounded-[26px] overflow-hidden bg-slate-950 select-none"
+          >
+            {/* Dynamic Island */}
+            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 w-20 h-4 rounded-full bg-slate-950/90 border border-white/10 z-20" />
+
+            {!activeTrack || !liveTelemetry ? (
+              <div
+                data-testid="studio3d-empty-track"
+                className="w-full h-full flex flex-col items-center justify-center text-center px-6 gap-4 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+                  <FileUp className="w-7 h-7" aria-hidden="true" />
+                </div>
+                <div className="space-y-1.5">
+                  <p className="font-display text-base font-bold text-white">
+                    Belum Ada Rute GPS
+                  </p>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Upload file <strong>.FIT</strong> atau <strong>.GPX</strong> untuk merender peta dunia nyata 3D tanpa rute contoh bawaan.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="studio3d-empty-upload-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-10 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold inline-flex items-center gap-2 shadow-lg transition-colors cursor-pointer"
+                >
+                  <FileUp className="w-4 h-4" aria-hidden="true" />
+                  <span>Upload .FIT / .GPX</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Live 3D WebGL Canvas */}
+                <div className="absolute inset-0">
+                  <Studio3DCanvas
+                    track={activeTrack}
+                    runner={runner}
+                    mapConfig={mapConfig}
+                    timelineProgress={progress}
+                    isPlaying={isPlaying || isExporting}
+                    includeFinishPose={exportConfig.includeFinishPose}
+                    currentCadence={liveTelemetry.point.cadence}
+                    currentPaceSec={liveTelemetry.point.paceSecPerKm}
+                    mapReloadNonce={mapReloadNonce}
+                    onMapLoadStatus={setMapLoadStatus}
+                    onCanvasReady={(c) => {
+                      webglCanvasRef.current = c;
+                    }}
+                    onCustomModelStatus={setCustomModelStatus}
+                  />
+                </div>
+
+                {/* Subtle real-tile loading progress badge inside preview when fetching tiles */}
+                {isMapLoading && (
+                  <div className="pointer-events-none absolute bottom-[168px] right-3 z-20 rounded-md bg-slate-950/85 border border-white/15 px-2 py-1 font-mono-tabular text-[10px] font-semibold text-amber-200 flex items-center gap-1.5">
+                    <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+                    <span>
+                      Peta {mapLoadStatus.loadedTiles}/{mapLoadStatus.totalTiles}
+                    </span>
+                  </div>
+                )}
+
+                {/* Top Broadcast Header Overlay (left side clear of GPS mini-map) */}
+                <div
+                  className="pointer-events-none absolute top-0 inset-x-0 pt-7 pb-6 px-3.5 pr-[88px] z-10"
+                  style={{
+                    background:
+                      'linear-gradient(180deg, rgba(2,6,23,0.86) 0%, rgba(2,6,23,0.42) 70%, rgba(2,6,23,0) 100%)',
+                  }}
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="font-mono-tabular text-[9px] font-bold tracking-wider text-emerald-400 truncate">
+                      SPORTBYTE · #{runner.bibNumber || '001'}
+                    </p>
+                    <p className="font-display text-sm font-bold text-white truncate">
+                      {activeTrack.title}
+                    </p>
+                    <p className="font-mono-tabular text-[10px] font-medium text-slate-200/90 truncate">
+                      {activeTrack.date} · {activeTrack.location}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Top-Right Compact GPS Mini-Map Radar Inset */}
+                {miniMap && (
+                  <div
+                    data-testid="studio3d-gps-minimap"
+                    className="pointer-events-none absolute top-6 right-3 z-15 w-16 h-16 rounded-xl bg-slate-950/88 border border-white/20 shadow-lg overflow-hidden"
+                  >
+                    <span className="absolute top-1 left-1.5 font-mono-tabular text-[8px] font-bold text-slate-400 leading-none">
+                      GPS
+                    </span>
+                    <svg
+                      viewBox="0 0 64 64"
+                      className="w-full h-full block"
+                      aria-hidden="true"
+                    >
+                      <polyline
+                        fill="none"
+                        stroke={mapConfig.routeStyle === 'sportbyte-lime' ? '#A6F04B' : '#38BDF8'}
+                        strokeWidth="2.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        points={miniMap.polyline.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ')}
+                      />
+                      <circle
+                        cx={miniMap.startPt.x}
+                        cy={miniMap.startPt.y}
+                        r="2.4"
+                        fill={mapConfig.routeStyle === 'sportbyte-lime' ? '#35D07F' : '#10B981'}
+                      />
+                      <circle
+                        cx={miniMap.runnerPt.x}
+                        cy={miniMap.runnerPt.y}
+                        r="3.2"
+                        fill="#FFFFFF"
+                        stroke={mapConfig.routeStyle === 'sportbyte-lime' ? '#14232C' : '#0284C7'}
+                        strokeWidth="1.4"
+                      />
+                    </svg>
+                  </div>
+                )}
+
+                {/* Animated Start Popup Overlay Banner */}
+                {bannerState.startAlpha > 0.02 && (
+                  <div
+                    data-testid="studio3d-start-banner"
+                    className="pointer-events-none absolute top-[96px] inset-x-3.5 z-10 rounded-xl bg-slate-950/90 border border-emerald-500/65 px-3 py-2 flex items-center gap-2.5 shadow-lg"
+                    style={{
+                      opacity: bannerState.startAlpha,
+                      transform: `translateY(${(bannerState.startOffsetY * 0.5).toFixed(1)}px)`,
+                    }}
+                  >
+                    <span className="px-2.5 py-1.5 rounded-lg bg-emerald-500 text-white font-mono-tabular text-[11px] font-extrabold tracking-wider shrink-0">
+                      START
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-display text-xs font-bold text-white truncate">
+                        {activeTrack.totalDistanceKm.toFixed(2)} KM · {activeTrack.location}
+                      </p>
+                      <p className="font-mono-tabular text-[10px] font-semibold text-emerald-200 truncate">
+                        #{runner.bibNumber || '001'} {runner.runnerName || 'Pelari'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Animated Finish Popup Overlay Banner */}
+                {bannerState.finishAlpha > 0.02 && (
+                  <div
+                    data-testid="studio3d-finish-banner"
+                    className="pointer-events-none absolute top-[96px] inset-x-3.5 z-10 rounded-2xl bg-slate-950/92 border border-orange-500/75 px-3 py-2.5 flex items-center gap-2.5 shadow-xl"
+                    style={{
+                      opacity: bannerState.finishAlpha,
+                      transform: `translateY(${(bannerState.finishOffsetY * 0.5).toFixed(1)}px)`,
+                    }}
+                  >
+                    <span className="px-2.5 py-1.5 rounded-lg bg-orange-500 text-white font-mono-tabular text-[11px] font-extrabold tracking-wider shrink-0">
+                      FINISH
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-display text-xs font-bold text-white truncate">
+                        {runner.runnerName || 'Pelari'} · #{runner.bibNumber || '001'}
+                      </p>
+                      <p className="font-mono-tabular text-[10px] font-bold text-amber-200 truncate">
+                        {activeTrack.totalDistanceKm.toFixed(2)} km · {formatDuration(activeTrack.totalDurationSec)} ·{' '}
+                        {formatPace(activeTrack.avgPaceSecPerKm)}/km
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Bottom Real-Time Telemetry HUD */}
+                <div
+                  className="pointer-events-none absolute bottom-0 inset-x-0 pt-10 pb-3.5 px-3 z-10"
+                  style={{
+                    background:
+                      'linear-gradient(0deg, rgba(2,6,23,0.92) 0%, rgba(2,6,23,0.52) 72%, rgba(2,6,23,0) 100%)',
+                  }}
+                >
+                  <div className="rounded-2xl bg-slate-950/88 border border-white/15 px-3.5 py-3 space-y-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="min-w-0 truncate">
+                        <span className="font-mono-tabular text-lg font-extrabold text-white">
+                          {liveTelemetry.distanceKm.toFixed(2)}
+                        </span>
+                        <span className="font-mono-tabular text-[10px] font-bold text-emerald-400 ml-1">
+                          / {activeTrack.totalDistanceKm.toFixed(2)} KM
+                        </span>
+                      </div>
+                      <span
+                        className={`font-mono-tabular text-[11px] font-bold shrink-0 ${
+                          liveTelemetry.isFinishPhase ? 'text-emerald-400' : 'text-slate-100'
+                        }`}
+                      >
+                        {liveTelemetry.isFinishPhase
+                          ? `FINISH · ${formatDuration(liveTelemetry.elapsedSec)}`
+                          : formatDuration(liveTelemetry.elapsedSec)}
+                      </span>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="w-full h-1.5 rounded-full bg-white/15 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-[width] duration-75"
+                        style={{
+                          width: `${Math.max(2, Math.min(100, progress * 100))}%`,
+                          backgroundColor: runner.jerseyColor,
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-x-2 gap-y-1.5">
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">
+                          PACE (/KM)
+                        </span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          {formatPace(liveTelemetry.point.paceSecPerKm)} /km
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">
+                          HEART RATE
+                        </span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          {liveTelemetry.point.hr} bpm
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">
+                          CADENCE
+                        </span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          {liveTelemetry.point.cadence} spm
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">
+                          DISTANCE
+                        </span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          {liveTelemetry.distanceKm.toFixed(2)} km
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">
+                          ELEV GAIN
+                        </span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          +{liveTelemetry.elevGainSoFarM} m
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block font-mono-tabular text-[9px] text-slate-400">TIME</span>
+                        <span className="font-mono-tabular text-xs font-bold text-white">
+                          {formatDuration(liveTelemetry.elapsedSec)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Playback Controls Bar */}
+        <div className="w-full max-w-[370px] flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="studio3d-play-btn"
+            onClick={handleTogglePlay}
+            disabled={isExporting || !track}
+            aria-label={isPlaying ? 'Pause animasi' : 'Putar animasi'}
+            className="w-9 h-9 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white inline-flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+          >
+            {isPlaying ? (
+              <Pause className="w-4 h-4" aria-hidden="true" />
+            ) : (
+              <Play className="w-4 h-4 ml-0.5" aria-hidden="true" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            data-testid="studio3d-restart-btn"
+            onClick={handleRestart}
+            disabled={isExporting || !track}
+            aria-label="Ulang dari awal"
+            className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.002}
+            value={progress}
+            disabled={isExporting || !track}
+            aria-label="Progress animasi 3D"
+            data-testid="studio3d-progress-slider"
+            onChange={(e) => setProgress(Number(e.target.value))}
+            className="flex-1 accent-orange-500 cursor-pointer disabled:opacity-50"
+          />
+
+          <span className="font-mono-tabular text-[11px] font-semibold text-slate-600 dark:text-slate-300 w-9 text-right shrink-0">
+            {Math.round(progress * 100)}%
+          </span>
+
+          <button
+            type="button"
+            onClick={() => setMuted((m) => !m)}
+            aria-label={muted ? 'Nyalakan audio' : 'Matikan audio'}
+            className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 inline-flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            {muted ? (
+              <VolumeX className="w-3.5 h-3.5 text-rose-500" aria-hidden="true" />
+            ) : (
+              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+            )}
+          </button>
+        </div>
+
+        {/* Consolidated Camera & Framing Controls (Single Unified Bar under Preview) */}
+        <div className="w-full max-w-[780px] pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col items-center gap-2.5">
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
+            {(
+              [
+                { id: 'auto', label: 'Auto', icon: <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'follow-chase', label: 'Ikut Jalan 3/4', icon: <Navigation className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'drone', label: 'Drone 61°', icon: <Camera className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'drone-180', label: 'Drone 180°', icon: <Orbit className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'follow-20m', label: 'Kamera Atas', icon: <Video className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'birds-eye', label: "Bird's-Eye", icon: <Eye className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'overview', label: 'Overview', icon: <Compass className="w-3.5 h-3.5" aria-hidden="true" /> },
+                { id: 'finish-pose', label: 'Finish', icon: <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> },
+              ] as Array<{ id: CameraMode3D; label: string; icon: React.ReactNode }>
+            ).map((btn) => (
+              <button
+                key={btn.id}
+                type="button"
+                data-testid={`studio3d-cam-${btn.id}`}
+                onClick={() => handleQuickCamera(btn.id)}
+                className={`h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  mapConfig.cameraMode === btn.id
+                    ? 'bg-slate-900 dark:bg-blue-600 text-white'
+                    : 'text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                {btn.icon}
+                <span>{btn.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {mapConfig.cameraMode === 'follow-20m' && (
+            <div
+              data-testid="studio3d-20m-angles"
+              className="flex flex-wrap items-center justify-center gap-1.5"
+            >
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-1">
+                Arah Atas:
+              </span>
+              {(
+                [
+                  { id: 'front', label: 'Depan' },
+                  { id: 'back', label: 'Belakang' },
+                  { id: 'side', label: 'Samping' },
+                  { id: 'orbit', label: 'Berputar' },
+                ] as Array<{ id: Camera20mAngle; label: string }>
+              ).map((ang) => (
+                <button
+                  key={ang.id}
+                  type="button"
+                  data-testid={`studio3d-20m-${ang.id}`}
+                  onClick={() => setMapConfig((prev) => ({ ...prev, camera20mAngle: ang.id }))}
+                  className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    mapConfig.camera20mAngle === ang.id
+                      ? 'bg-orange-500 text-white'
+                      : 'text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {ang.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="w-full max-w-[440px] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-1 min-w-[185px]">
+              <ZoomIn className="w-3.5 h-3.5 text-blue-500 shrink-0" aria-hidden="true" />
+              <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                Zoom
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={2.5}
+                step={0.05}
+                value={mapConfig.cameraZoom ?? 1.0}
+                aria-label="Zoom Kamera 3D"
+                data-testid="studio3d-quick-zoom-slider"
+                onChange={(e) =>
+                  setMapConfig((prev) => ({ ...prev, cameraZoom: Number(e.target.value) }))
+                }
+                className="flex-1 accent-blue-600 cursor-pointer"
+              />
+              <span className="font-mono-tabular text-[11px] font-bold text-slate-800 dark:text-slate-100 w-9 text-right shrink-0">
+                {(mapConfig.cameraZoom ?? 1.0).toFixed(1)}×
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0 border-l border-slate-200 dark:border-slate-700 pl-3">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mr-0.5">
+                Pelari:
+              </span>
+              {(
+                [
+                  { id: 'small', label: 'S' },
+                  { id: 'medium', label: 'M' },
+                  { id: 'large', label: 'L' },
+                ] as Array<{ id: CharacterSize3D; label: string }>
+              ).map((sz) => (
+                <button
+                  key={sz.id}
+                  type="button"
+                  data-testid={`studio3d-quick-size-${sz.id}`}
+                  onClick={() => setRunner((prev) => ({ ...prev, characterSize: sz.id }))}
+                  title={
+                    sz.id === 'small'
+                      ? 'Ukuran Kecil (Proporsional)'
+                      : sz.id === 'medium'
+                        ? 'Ukuran Sedang'
+                        : 'Ukuran Besar'
+                  }
+                  className={`w-7 h-6 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                    runner.characterSize === sz.id
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {sz.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* BOTTOM MENU: Pengaturan Pelari, Peta & Info, Export 9:16 */}
+      <Studio3DPanelTabs
+        activeTab={activeTab}
+        onChangeTab={setActiveTab}
+        runner={runner}
+        onChangeRunner={setRunner}
+        customModelStatus={customModelStatus}
+        savedAvatars={savedAvatars}
+        activeSavedAvatarId={activeSavedAvatarId}
+        avatarStorageNotice={avatarStorageNotice}
+        onSelectGlbFile={(file, replaceId) => {
+          void handleSelectGlbFile(file, replaceId);
+        }}
+        onSaveCurrentGlbAvatar={() => {
+          void handleSaveCurrentGlbAvatar();
+        }}
+        onLoadSavedGlbAvatar={(id) => {
+          void handleLoadSavedGlbAvatar(id);
+        }}
+        onDeleteSavedGlbAvatar={(id) => {
+          void handleDeleteSavedGlbAvatar(id);
+        }}
+        onClearGlbModel={handleClearGlbModel}
+        mapConfig={mapConfig}
+        onChangeMapConfig={setMapConfig}
+        mapLoadStatus={mapLoadStatus}
+        routeSnapStatus={routeSnapStatus}
+        onReloadMap={handleReloadMap}
+        exportConfig={exportConfig}
+        onChangeExportConfig={setExportConfig}
+        track={activeTrack}
+        onUpdateTrackInfo={(patch) =>
+          setTrack((prev) => (prev ? { ...prev, ...patch } : prev))
+        }
+        onAddCustomLandmark={(label, lmProgress) => {
+          setTrack((prev) => {
+            if (!prev) return prev;
+            const pt = sampleTrackPointByDistance(prev.points, prev.totalDistanceKm, lmProgress);
+            return {
+              ...prev,
+              landmarks: [
+                ...prev.landmarks,
+                {
+                  id: `lm-custom-${Date.now()}`,
+                  label,
+                  type: 'custom',
+                  progress: lmProgress,
+                  distanceKm: Math.round(pt.distanceKm * 100) / 100,
+                  elevationM: Math.round(pt.elevationM),
+                },
+              ],
+            };
+          });
+        }}
+        onRemoveLandmark={(id) =>
+          setTrack((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  landmarks: prev.landmarks.filter((lm) => lm.id !== id),
+                }
+              : prev,
+          )
+        }
+        isExporting={isExporting}
+        exportPercent={exportPercent}
+        exportError={exportError}
+        lastExportInfo={lastExportInfo}
+        onStartExport={handleStartExport}
+        onCancelExport={handleCancelExport}
+      />
+    </div>
+  );
+};
+
+

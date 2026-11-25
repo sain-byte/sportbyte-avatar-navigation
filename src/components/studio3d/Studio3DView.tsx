@@ -22,10 +22,8 @@ import {
   DEFAULT_EXPORT_CONFIG,
   DEFAULT_MAP_CONFIG,
   DEFAULT_RUNNER_CONFIG,
-  normalizeMapStyle3D,
   type Camera20mAngle,
   type CameraMode3D,
-  type CanonicalMapStyle3D,
   type CharacterSize3D,
   type ExportConfig,
   type MapConfig,
@@ -79,7 +77,7 @@ const INITIAL_MAP_LOAD_STATUS: MapLoadStatus = {
   phase: 'loading',
   loadedTiles: 0,
   failedTiles: 0,
-  totalTiles: 25,
+  totalTiles: 1,
   zoom: 15,
 };
 
@@ -116,7 +114,7 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
   const [mapLoadStatus, setMapLoadStatus] = useState<MapLoadStatus>(INITIAL_MAP_LOAD_STATUS);
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0); // 0..1
+  const [progress, setProgress] = useState(0);
   const [muted, setMuted] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
 
@@ -144,10 +142,11 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioEngineRef = useRef<Studio3DAudioEngine | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
   const activeModelBlobRef = useRef<Blob | null>(null);
-  const snappedTrackCacheRef = useRef<Map<string, Studio3DTrack>>(new Map());
+  const snappedTrackCacheRef = useRef>(new Map());
   const hasAutoPickedGpsRef = useRef(Boolean(initialPicked));
   const latestBlobUrlsRef = useRef<{ audio: string | null; model: string | null }>({
     audio: null,
@@ -181,7 +180,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
     };
   }, []);
 
-  // Auto-pick newest GPS run once when runs load asynchronously from server/Firestore
   useEffect(() => {
     if (track || hasAutoPickedGpsRef.current || runs.length === 0) return;
     const picked = pickInitialGpsTrackFromRuns(runs, user?.biodata.city || 'Indonesia', {
@@ -197,7 +195,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
     }
   }, [runs, track, user?.biodata.city, user?.biodata.restingHr, user?.biodata.maxHr]);
 
-  // Sync runnerName once user profile hydrates asynchronously (e.g. direct visit to /3D/)
   useEffect(() => {
     const resolvedName = user?.biodata.fullName || user?.username;
     if (!resolvedName) return;
@@ -208,7 +205,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
     );
   }, [user?.biodata.fullName, user?.username]);
 
-  // Restore saved .GLB avatars from persistent IndexedDB on mount
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -238,7 +234,7 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
           });
         }
       } catch {
-        // Ignore IndexedDB unavailability in restricted private contexts
+        // Ignore IndexedDB unavailability
       }
     })();
     return () => {
@@ -616,6 +612,7 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
       const engine = getAudioEngine();
       const result = await recordStudio3DVideo({
         getSourceCanvas: () => webglCanvasRef.current,
+        getMapCanvas: () => mapCanvasRef.current,
         setProgress: (nextP) => setProgress(nextP),
         audioEngine: engine,
         track: activeTrack,
@@ -663,7 +660,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
 
   return (
     <div data-testid="view-studio3d" className="space-y-4">
-      {/* Compact Header Bar: Judul, Ringkasan Satu Baris & Sumber Rute */}
       <header className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3.5 sm:px-5 shadow-xs space-y-2.5">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div className="min-w-0 space-y-0.5">
@@ -778,12 +774,10 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
         )}
       </header>
 
-      {/* TOP STAGE: 9:16 3D Preview + Load Map + Playback & Camera Controls */}
       <section
         data-testid="studio3d-preview-stage"
         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col items-center gap-3.5"
       >
-        {/* Map Status & Explicit Muat Peta Action Bar */}
         <div className="w-full max-w-[780px] flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
           <div
             data-testid="studio3d-map-status"
@@ -797,55 +791,62 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                     ? 'bg-amber-500'
                     : mapLoadStatus.phase === 'ready'
                       ? 'bg-emerald-500'
-                      : mapLoadStatus.phase === 'partial'
-                        ? 'bg-amber-500'
-                        : 'bg-rose-500'
+                      : 'bg-rose-500'
               }`}
             />
             <span>
               {!track
                 ? 'Menunggu file .FIT / .GPX atau riwayat lari GPS'
                 : isMapLoading
-                  ? `Memuat Peta Asli ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} (z${mapLoadStatus.zoom})...`
+                  ? 'Memuat Peta OpenFreeMap...'
                   : mapLoadStatus.phase === 'ready'
-                    ? `Peta Asli z${mapLoadStatus.zoom} · ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} tile`
-                    : mapLoadStatus.phase === 'partial'
-                      ? `Peta Parsial ${mapLoadStatus.loadedTiles}/${mapLoadStatus.totalTiles} (${mapLoadStatus.failedTiles} gagal)`
-                      : 'Peta gagal dimuat · coba Muat Peta'}
+                    ? `OpenFreeMap (${mapConfig.mapStyle === 'dark' ? 'Night' : 'Light'}) · ${mapConfig.buildings3d ? '3D ON' : '3D OFF'}`
+                    : 'Peta gagal dimuat · coba Muat Peta'}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <select
-              aria-label="Layer Peta 3D"
-              data-testid="studio3d-quick-mapstyle"
-              value={normalizeMapStyle3D(mapConfig.mapStyle)}
-              onChange={(e) => {
-                const nextStyle = e.target.value as CanonicalMapStyle3D;
-                setMapConfig((prev) => ({
-                  ...prev,
-                  mapStyle: nextStyle,
-                  buildings3d:
-                    nextStyle === 'city3d' || nextStyle === 'liberty' ? true : prev.buildings3d,
-                }));
-              }}
-              className="h-7 px-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-[11px] font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setMapConfig((prev) => ({ ...prev, mapStyle: 'light' }))}
+              className={`h-7 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                mapConfig.mapStyle === 'light'
+                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+              }`}
             >
-              <option value="standard">Peta: Street</option>
-              <option value="liberty">Peta: Liberty (OpenFreeMap)</option>
-              <option value="satellite">Peta: Satellite</option>
-              <option value="terrain">Peta: Terrain</option>
-              <option value="monochrome">Peta: Monochrome</option>
-              <option value="hybrid">Peta: Hybrid</option>
-              <option value="city3d">Peta: 3D City</option>
-            </select>
-
+              Light
+            </button>
+            <button
+              type="button"
+              onClick={() => setMapConfig((prev) => ({ ...prev, mapStyle: 'dark' }))}
+              className={`h-7 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                mapConfig.mapStyle === 'dark'
+                  ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300'
+              }`}
+            >
+              Night
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setMapConfig((prev) => ({ ...prev, buildings3d: !prev.buildings3d }))
+              }
+              className={`h-7 px-2.5 rounded-lg border text-[11px] font-semibold cursor-pointer ${
+                mapConfig.buildings3d
+                  ? 'border-orange-500 bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300'
+                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              {mapConfig.buildings3d ? '3D ON' : '3D OFF'}
+            </button>
             <button
               type="button"
               data-testid="studio3d-reload-map-btn"
               disabled={!track}
               onClick={handleReloadMap}
-              className="h-7 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 dark:text-slate-100 text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+              className="h-7 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 dark:text-slate-100 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
             >
               <RefreshCw
                 className={`w-3 h-3 text-blue-600 dark:text-blue-400 ${
@@ -853,18 +854,16 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                 }`}
                 aria-hidden="true"
               />
-              <span>{track && isMapLoading ? 'Memuat Peta...' : 'Muat Peta'}</span>
+              <span>Muat</span>
             </button>
           </div>
         </div>
 
-        {/* Phone Hardware Frame (Strict 9:16 Aspect Ratio centered at Top) */}
         <div className="w-full max-w-[350px] sm:max-w-[370px] rounded-[36px] p-2.5 bg-slate-900 dark:bg-slate-800 border-4 border-slate-800 dark:border-slate-700 shadow-2xl">
           <div
             data-testid="studio3d-phone-screen"
             className="relative w-full aspect-[9/16] rounded-[26px] overflow-hidden bg-slate-950 select-none"
           >
-            {/* Dynamic Island */}
             <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 w-20 h-4 rounded-full bg-slate-950/90 border border-white/10 z-20" />
 
             {!activeTrack || !liveTelemetry ? (
@@ -895,7 +894,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
               </div>
             ) : (
               <>
-                {/* Live 3D WebGL Canvas */}
                 <div className="absolute inset-0">
                   <Studio3DCanvas
                     track={activeTrack}
@@ -911,21 +909,13 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                     onCanvasReady={(c) => {
                       webglCanvasRef.current = c;
                     }}
+                    onMapCanvasReady={(c) => {
+                      mapCanvasRef.current = c;
+                    }}
                     onCustomModelStatus={setCustomModelStatus}
                   />
                 </div>
 
-                {/* Subtle real-tile loading progress badge inside preview when fetching tiles */}
-                {isMapLoading && (
-                  <div className="pointer-events-none absolute bottom-[168px] right-3 z-20 rounded-md bg-slate-950/85 border border-white/15 px-2 py-1 font-mono-tabular text-[10px] font-semibold text-amber-200 flex items-center gap-1.5">
-                    <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                    <span>
-                      Peta {mapLoadStatus.loadedTiles}/{mapLoadStatus.totalTiles}
-                    </span>
-                  </div>
-                )}
-
-                {/* Top Broadcast Header Overlay (left side clear of GPS mini-map) */}
                 <div
                   className="pointer-events-none absolute top-0 inset-x-0 pt-7 pb-6 px-3.5 pr-[88px] z-10"
                   style={{
@@ -946,7 +936,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                   </div>
                 </div>
 
-                {/* Top-Right Compact GPS Mini-Map Radar Inset */}
                 {miniMap && (
                   <div
                     data-testid="studio3d-gps-minimap"
@@ -986,7 +975,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                   </div>
                 )}
 
-                {/* Animated Start Popup Overlay Banner */}
                 {bannerState.startAlpha > 0.02 && (
                   <div
                     data-testid="studio3d-start-banner"
@@ -1010,7 +998,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                   </div>
                 )}
 
-                {/* Animated Finish Popup Overlay Banner */}
                 {bannerState.finishAlpha > 0.02 && (
                   <div
                     data-testid="studio3d-finish-banner"
@@ -1035,7 +1022,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                   </div>
                 )}
 
-                {/* Bottom Real-Time Telemetry HUD */}
                 <div
                   className="pointer-events-none absolute bottom-0 inset-x-0 pt-10 pb-3.5 px-3 z-10"
                   style={{
@@ -1064,7 +1050,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
                       </span>
                     </div>
 
-                    {/* Progress bar */}
                     <div className="w-full h-1.5 rounded-full bg-white/15 overflow-hidden">
                       <div
                         className="h-full rounded-full transition-[width] duration-75"
@@ -1130,7 +1115,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
           </div>
         </div>
 
-        {/* Playback Controls Bar */}
         <div className="w-full max-w-[370px] flex items-center gap-2">
           <button
             type="button"
@@ -1189,7 +1173,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
           </button>
         </div>
 
-        {/* Consolidated Camera & Framing Controls (Single Unified Bar under Preview) */}
         <div className="w-full max-w-[780px] pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col items-center gap-2.5">
           <div className="flex flex-wrap items-center justify-center gap-1.5">
             {(
@@ -1315,7 +1298,6 @@ export const Studio3DView: React.FC<Studio3DViewProps> = ({
         </div>
       </section>
 
-      {/* BOTTOM MENU: Pengaturan Pelari, Peta & Info, Export 9:16 */}
       <Studio3DPanelTabs
         activeTab={activeTab}
         onChangeTab={setActiveTab}

@@ -1,10 +1,9 @@
+
 import React, { Component, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { normalizeMapStyle3D } from '../../types/studio3d';
 import type {
-  CameraMode3D,
   LightingMood3D,
   MapConfig,
   MapLoadStatus,
@@ -15,12 +14,6 @@ import {
   buildGroundedRoutePath,
   sampleGroundedRouteAtProgress,
 } from '../../utils/studio3dGpsEngine';
-import {
-  computeTerrainGridConfig,
-  fetchRealDemGridForTrack,
-  sampleTerrainY,
-  type RealDemGrid,
-} from '../../utils/studio3dMapTiles';
 import { resolveEffectiveCameraMode } from '../../utils/studio3dRunnerHelpers';
 import { ChibiRunner3D } from './ChibiRunner3D';
 import { CustomGlbRunner3D, type CustomGlbStatus } from './CustomGlbRunner3D';
@@ -39,13 +32,11 @@ interface Studio3DCanvasProps {
   mapReloadNonce: number;
   onMapLoadStatus?: (status: MapLoadStatus) => void;
   onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
+  onMapCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
   onCustomModelStatus?: (status: CustomGlbStatus) => void;
 }
 
 interface MoodPalette {
-  sky: string;
-  fog: string;
-  fogDensity: number;
   keyColor: string;
   keyIntensity: number;
   keyPos: [number, number, number];
@@ -61,19 +52,12 @@ function resolveLightingMood(
   mapStyle: MapConfig['mapStyle'],
 ): Exclude<LightingMood3D, 'auto'> {
   if (mood !== 'auto') return mood;
-  if (mapStyle === 'night') return 'night-run';
-  const normalized = normalizeMapStyle3D(mapStyle);
-  if (normalized === 'terrain') return 'mountain';
-  if (normalized === 'satellite' || normalized === 'hybrid') return 'morning';
-  if (normalized === 'liberty') return 'city-park';
+  if (mapStyle === 'dark') return 'night-run';
   return 'city-park';
 }
 
 const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
   morning: {
-    sky: '#BAE6FD',
-    fog: '#E0F2FE',
-    fogDensity: 0.00007,
     keyColor: '#FFF7ED',
     keyIntensity: 1.95,
     keyPos: [160, 220, 120],
@@ -84,9 +68,6 @@ const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
     rimIntensity: 0.65,
   },
   evening: {
-    sky: '#FDBA74',
-    fog: '#FED7AA',
-    fogDensity: 0.00011,
     keyColor: '#FB923C',
     keyIntensity: 1.9,
     keyPos: [-220, 95, 140],
@@ -97,9 +78,6 @@ const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
     rimIntensity: 0.85,
   },
   night: {
-    sky: '#0B1120',
-    fog: '#0F172A',
-    fogDensity: 0.00016,
     keyColor: '#93C5FD',
     keyIntensity: 1.05,
     keyPos: [120, 200, -140],
@@ -110,22 +88,16 @@ const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
     rimIntensity: 1.35,
   },
   'city-park': {
-    sky: '#DBEAFE',
-    fog: '#EFF6FF',
-    fogDensity: 0.00007,
     keyColor: '#FFFBEB',
     keyIntensity: 1.85,
     keyPos: [140, 240, 150],
     hemiSky: '#DBEAFE',
-    hemiGround: '#4ADE80',
-    hemiIntensity: 0.74,
+    hemiGround: '#94A3B8',
+    hemiIntensity: 0.78,
     rimColor: '#BAE6FD',
     rimIntensity: 0.55,
   },
   mountain: {
-    sky: '#CBE7F8',
-    fog: '#DCEEF8',
-    fogDensity: 0.00008,
     keyColor: '#F8FAFC',
     keyIntensity: 2.0,
     keyPos: [180, 210, -110],
@@ -136,9 +108,6 @@ const MOOD_PALETTES: Record<Exclude<LightingMood3D, 'auto'>, MoodPalette> = {
     rimIntensity: 0.6,
   },
   'night-run': {
-    sky: '#050816',
-    fog: '#090F24',
-    fogDensity: 0.00018,
     keyColor: '#60A5FA',
     keyIntensity: 1.0,
     keyPos: [100, 190, 130],
@@ -196,20 +165,9 @@ class WebGLErrorBoundary extends Component<
   }
 }
 
-const SceneContent: React.FC<{
-  track: Studio3DTrack;
-  runner: RunnerConfig;
-  mapConfig: MapConfig;
-  timelineProgress: number;
-  isPlaying: boolean;
-  includeFinishPose: boolean;
-  currentCadence: number;
-  currentPaceSec: number;
-  mapReloadNonce: number;
-  onMapLoadStatus?: (status: MapLoadStatus) => void;
-  onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
-  onCustomModelStatus?: (status: CustomGlbStatus) => void;
-}> = ({
+const SceneContent: React.FC<
+  Studio3DCanvasProps & { mapContainer: HTMLDivElement | null }
+> = ({
   track,
   runner,
   mapConfig,
@@ -219,61 +177,24 @@ const SceneContent: React.FC<{
   currentCadence,
   currentPaceSec,
   mapReloadNonce,
+  mapContainer,
   onMapLoadStatus,
   onCanvasReady,
+  onMapCanvasReady,
   onCustomModelStatus,
 }) => {
   const { gl, scene, camera } = useThree();
   const keyLightRef = useRef<THREE.DirectionalLight>(null);
-  const [demGrid, setDemGrid] = useState<RealDemGrid | null>(null);
 
-  const grid = useMemo(
-    () => computeTerrainGridConfig(track),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      track.id,
-      track.minLat,
-      track.maxLat,
-      track.minLon,
-      track.maxLon,
-      track.centerLat,
-      track.centerLon,
-      track.spanMeters,
-    ],
-  );
   const resolvedMood = resolveLightingMood(mapConfig.lightingMood, mapConfig.mapStyle);
   const mood = MOOD_PALETTES[resolvedMood];
   const isNightMood = resolvedMood === 'night' || resolvedMood === 'night-run';
 
-  // Fetch adaptive 9x9/11x11 real Copernicus/ASTER elevation grid around track & on manual reload
-  useEffect(() => {
-    const controller = new AbortController();
-    setDemGrid(null);
-    void fetchRealDemGridForTrack(grid, controller.signal, track.spanMeters).then((g) => {
-      if (!controller.signal.aborted && g) {
-        setDemGrid(g);
-      }
-    });
-    return () => controller.abort();
-  }, [grid, track.spanMeters, mapReloadNonce]);
-
-  const activeDemGrid = useMemo(() => {
-    if (!demGrid) return null;
-    const sameBounds =
-      Math.abs(demGrid.northLat - grid.northLat) < 1e-6 &&
-      Math.abs(demGrid.southLat - grid.southLat) < 1e-6 &&
-      Math.abs(demGrid.westLon - grid.westLon) < 1e-6 &&
-      Math.abs(demGrid.eastLon - grid.eastLon) < 1e-6;
-    return sameBounds ? demGrid : null;
-  }, [demGrid, grid]);
-
-  // Report live canvas element to parent for 9:16 MediaRecorder export
   useEffect(() => {
     onCanvasReady?.(gl.domElement);
     return () => onCanvasReady?.(null);
   }, [gl, onCanvasReady]);
 
-  // Populate scene.environment once with PMREM RoomEnvironment for crisp PBR shading
   useEffect(() => {
     const pmrem = new THREE.PMREMGenerator(gl);
     const roomEnv = new RoomEnvironment();
@@ -288,15 +209,10 @@ const SceneContent: React.FC<{
     };
   }, [gl, scene]);
 
-  // Build overshoot-free terrain-grounded 3D GPS route polyline matching real street geometry
+  // Flat Y=0 grounded path matching MapLibre GL planar ground
   const groundedPath = useMemo(
-    () =>
-      buildGroundedRoutePath(
-        track.points,
-        (xM, zM) => sampleTerrainY(xM, zM, track, activeDemGrid),
-        { heightOffsetM: 0.22 },
-      ),
-    [track, activeDemGrid],
+    () => buildGroundedRoutePath(track.points, () => 0, { heightOffsetM: 0.08 }),
+    [track],
   );
 
   const finishThreshold = includeFinishPose ? 0.88 : 1.0;
@@ -317,13 +233,11 @@ const SceneContent: React.FC<{
     [track.spanMeters, characterSizeFactor],
   );
 
-  // Sample runner world position & facing yaw by cumulative distance along grounded route
   const { runnerPos, runnerYaw } = useMemo(() => {
     const sampled = sampleGroundedRouteAtProgress(groundedPath, routeProgress);
     return { runnerPos: sampled.position, runnerYaw: sampled.yawRad };
   }, [groundedPath, routeProgress]);
 
-  // Pre-allocated camera scratch vectors (zero allocation inside useFrame)
   const camTargetPosRef = useRef(new THREE.Vector3());
   const camLookTargetRef = useRef(new THREE.Vector3());
   const smoothLookAtRef = useRef(new THREE.Vector3(runnerPos.x, runnerPos.y, runnerPos.z));
@@ -331,7 +245,6 @@ const SceneContent: React.FC<{
   const prevScrubProgressRef = useRef(timelineProgress);
   const prevModeRef = useRef(mapConfig.cameraMode);
 
-  // Reset camera smoothly when loading a different track
   useEffect(() => {
     initializedCamRef.current = false;
   }, [track.id]);
@@ -351,7 +264,7 @@ const SceneContent: React.FC<{
     const overviewHeight = Math.max(165, Math.min(920, track.spanMeters * 0.68)) * zoom;
     const overviewDist = Math.max(135, Math.min(720, track.spanMeters * 0.52)) * zoom;
     const droneHeight = Math.max(46, Math.min(115, track.spanMeters * 0.062)) * zoom;
-    const droneBackDist = droneHeight * 0.54; // ~61deg wide aerial chase
+    const droneBackDist = droneHeight * 0.54;
 
     if (effectiveMode === 'overview') {
       const orbitAngle =
@@ -363,47 +276,33 @@ const SceneContent: React.FC<{
         overviewHeight,
         Math.cos(orbitAngle) * overviewDist,
       );
-      camLookTargetRef.current.set(0, track.maxElevationM * 0.25, 0);
+      camLookTargetRef.current.set(0, 0, 0);
     } else if (effectiveMode === 'follow-chase') {
-      // Screenshot-style oblique 3/4 trailing street chase (~57 deg downward pitch with clear runner & road corridor)
       const chaseHeight = Math.max(46, visualHeight * 4.4) * zoom;
       const chaseBackDist = chaseHeight * 0.62;
       const trailAngle = runnerYaw + Math.PI * 0.95;
       const camX = runnerPos.x + Math.sin(trailAngle) * chaseBackDist;
       const camZ = runnerPos.z + Math.cos(trailAngle) * chaseBackDist;
-      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
-      camTargetPosRef.current.set(
-        camX,
-        Math.max(runnerPos.y + chaseHeight, terrainFloorY),
-        camZ,
-      );
-      // Look ahead of runner so avatar sits cleanly in lower-mid frame above bottom HUD
+      camTargetPosRef.current.set(camX, Math.max(runnerPos.y + chaseHeight, 8), camZ);
       camLookTargetRef.current.set(
         runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 3.8),
         runnerPos.y + runnerScale * 0.4,
         runnerPos.z + Math.cos(runnerYaw) * (runnerScale * 3.8),
       );
     } else if (effectiveMode === 'birds-eye') {
-      // High-altitude top-down Strava/Relive style (~79 deg downward pitch) with spacious map context
       const birdsHeight =
         Math.max(95, Math.min(270, Math.max(visualHeight * 10.5, track.spanMeters * 0.14))) * zoom;
       const birdsBackDist = birdsHeight * 0.19;
       const trailAngle = runnerYaw + Math.PI * 0.92;
       const camX = runnerPos.x + Math.sin(trailAngle) * birdsBackDist;
       const camZ = runnerPos.z + Math.cos(trailAngle) * birdsBackDist;
-      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 12;
-      camTargetPosRef.current.set(
-        camX,
-        Math.max(runnerPos.y + birdsHeight, terrainFloorY),
-        camZ,
-      );
+      camTargetPosRef.current.set(camX, Math.max(runnerPos.y + birdsHeight, 12), camZ);
       camLookTargetRef.current.set(
         runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 2.2),
         runnerPos.y + runnerScale * 0.4,
         runnerPos.z + Math.cos(runnerYaw) * (runnerScale * 2.2),
       );
     } else if (effectiveMode === 'drone-180') {
-      // Smooth 180° horizontal orbital sweep (-90° to +90°) around runner with terrain floor clearance
       const orbitSweep =
         Math.sin(timelineProgress * Math.PI * 2.5 + state.clock.elapsedTime * 0.22) *
         (Math.PI * 0.5);
@@ -412,19 +311,9 @@ const SceneContent: React.FC<{
       const orbitHeight = Math.max(visualHeight * 2.0, Math.min(44, track.spanMeters * 0.028)) * zoom;
       const camX = runnerPos.x + Math.sin(orbitAngle) * orbitDist;
       const camZ = runnerPos.z + Math.cos(orbitAngle) * orbitDist;
-      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 6;
-      camTargetPosRef.current.set(
-        camX,
-        Math.max(runnerPos.y + orbitHeight, terrainFloorY),
-        camZ,
-      );
-      camLookTargetRef.current.set(
-        runnerPos.x,
-        runnerPos.y + runnerScale * 0.95,
-        runnerPos.z,
-      );
+      camTargetPosRef.current.set(camX, Math.max(runnerPos.y + orbitHeight, 6), camZ);
+      camLookTargetRef.current.set(runnerPos.x, runnerPos.y + runnerScale * 0.95, runnerPos.z);
     } else if (effectiveMode === 'follow-20m') {
-      // Calibrated spacious overhead tracking camera relative to runner visual height + user zoom
       const baseAngle =
         mapConfig.camera20mAngle === 'front'
           ? runnerYaw
@@ -437,19 +326,9 @@ const SceneContent: React.FC<{
       const aerialHeight = Math.max(28, visualHeight * 3.8) * zoom;
       const camX = runnerPos.x + Math.sin(baseAngle) * horizDist;
       const camZ = runnerPos.z + Math.cos(baseAngle) * horizDist;
-      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
-      camTargetPosRef.current.set(
-        camX,
-        Math.max(runnerPos.y + aerialHeight, terrainFloorY),
-        camZ,
-      );
-      camLookTargetRef.current.set(
-        runnerPos.x,
-        runnerPos.y + runnerScale * 0.8,
-        runnerPos.z,
-      );
+      camTargetPosRef.current.set(camX, Math.max(runnerPos.y + aerialHeight, 8), camZ);
+      camLookTargetRef.current.set(runnerPos.x, runnerPos.y + runnerScale * 0.8, runnerPos.z);
     } else if (effectiveMode === 'finish-pose') {
-      // Front-facing hero view directly in front of the avatar cleanly framed between top FINISH banner and bottom HUD
       const finishZoom = THREE.MathUtils.clamp(zoom, 0.75, 1.55);
       const orbitOffset = Math.sin(state.clock.elapsedTime * 0.65) * 0.12;
       const frontAngle = runnerYaw + orbitOffset;
@@ -460,22 +339,12 @@ const SceneContent: React.FC<{
         runnerPos.y + heroHeight,
         runnerPos.z + Math.cos(frontAngle) * heroDist,
       );
-      camLookTargetRef.current.set(
-        runnerPos.x,
-        runnerPos.y + runnerScale * 1.68,
-        runnerPos.z,
-      );
+      camLookTargetRef.current.set(runnerPos.x, runnerPos.y + runnerScale * 1.68, runnerPos.z);
     } else {
-      // Aerial Drone View ~61° tracking runner with clear forward route framing
       const trailAngle = runnerYaw + Math.PI * 0.86;
       const camX = runnerPos.x + Math.sin(trailAngle) * droneBackDist;
       const camZ = runnerPos.z + Math.cos(trailAngle) * droneBackDist;
-      const terrainFloorY = sampleTerrainY(camX, camZ, track, activeDemGrid) + 8;
-      camTargetPosRef.current.set(
-        camX,
-        Math.max(runnerPos.y + droneHeight, terrainFloorY),
-        camZ,
-      );
+      camTargetPosRef.current.set(camX, Math.max(runnerPos.y + droneHeight, 8), camZ);
       camLookTargetRef.current.set(
         runnerPos.x + Math.sin(runnerYaw) * (runnerScale * 2.2),
         runnerPos.y + runnerScale * 0.75,
@@ -483,7 +352,6 @@ const SceneContent: React.FC<{
       );
     }
 
-    // Smoothly widen vertical FOV in overhead/top-down modes for richer 9:16 lateral street context
     if (camera instanceof THREE.PerspectiveCamera) {
       const targetFov =
         effectiveMode === 'follow-20m' || effectiveMode === 'birds-eye' ? 52 : 45;
@@ -514,47 +382,16 @@ const SceneContent: React.FC<{
             : effectiveMode === 'drone-180' || effectiveMode === 'follow-20m'
               ? 4.6
               : 5.5;
-      camera.position.x = THREE.MathUtils.damp(
-        camera.position.x,
-        camTargetPosRef.current.x,
-        lambda,
-        dt,
-      );
-      camera.position.y = THREE.MathUtils.damp(
-        camera.position.y,
-        camTargetPosRef.current.y,
-        lambda,
-        dt,
-      );
-      camera.position.z = THREE.MathUtils.damp(
-        camera.position.z,
-        camTargetPosRef.current.z,
-        lambda,
-        dt,
-      );
+      camera.position.x = THREE.MathUtils.damp(camera.position.x, camTargetPosRef.current.x, lambda, dt);
+      camera.position.y = THREE.MathUtils.damp(camera.position.y, camTargetPosRef.current.y, lambda, dt);
+      camera.position.z = THREE.MathUtils.damp(camera.position.z, camTargetPosRef.current.z, lambda, dt);
 
-      smoothLookAtRef.current.x = THREE.MathUtils.damp(
-        smoothLookAtRef.current.x,
-        camLookTargetRef.current.x,
-        lambda + 1.5,
-        dt,
-      );
-      smoothLookAtRef.current.y = THREE.MathUtils.damp(
-        smoothLookAtRef.current.y,
-        camLookTargetRef.current.y,
-        lambda + 1.5,
-        dt,
-      );
-      smoothLookAtRef.current.z = THREE.MathUtils.damp(
-        smoothLookAtRef.current.z,
-        camLookTargetRef.current.z,
-        lambda + 1.5,
-        dt,
-      );
+      smoothLookAtRef.current.x = THREE.MathUtils.damp(smoothLookAtRef.current.x, camLookTargetRef.current.x, lambda + 1.5, dt);
+      smoothLookAtRef.current.y = THREE.MathUtils.damp(smoothLookAtRef.current.y, camLookTargetRef.current.y, lambda + 1.5, dt);
+      smoothLookAtRef.current.z = THREE.MathUtils.damp(smoothLookAtRef.current.z, camLookTargetRef.current.z, lambda + 1.5, dt);
       camera.lookAt(smoothLookAtRef.current);
     }
 
-    // Keep tight directional shadow frustum tracking runner for crisp grounded shadows
     if (keyLightRef.current) {
       keyLightRef.current.position.set(
         runnerPos.x + mood.keyPos[0] * 0.55,
@@ -568,9 +405,6 @@ const SceneContent: React.FC<{
 
   return (
     <>
-      <color attach="background" args={[mood.sky]} />
-      <fogExp2 attach="fog" args={[mood.fog, mood.fogDensity]} />
-
       <hemisphereLight args={[mood.hemiSky, mood.hemiGround, mood.hemiIntensity]} />
 
       <directionalLight
@@ -590,7 +424,6 @@ const SceneContent: React.FC<{
         shadow-normalBias={0.04}
       />
 
-      {/* Rim backlight to separate silhouette cleanly in evening/night moods */}
       <directionalLight
         color={mood.rimColor}
         intensity={mood.rimIntensity}
@@ -600,19 +433,16 @@ const SceneContent: React.FC<{
       <TerrainMap3D
         key={track.id}
         track={track}
-        grid={grid}
-        demGrid={activeDemGrid}
         mapStyle={mapConfig.mapStyle}
         routeStyle={mapConfig.routeStyle ?? 'google-maps'}
         buildings3d={mapConfig.buildings3d}
-        overlayRelief={mapConfig.overlayRelief ?? true}
-        overlaySurface={mapConfig.overlaySurface ?? true}
-        overlayLabels={mapConfig.overlayLabels ?? true}
-        resolvedMood={resolvedMood}
+        isNight={isNightMood}
         jerseyColor={runner.jerseyColor}
         routeProgress={routeProgress}
         groundedPath={groundedPath}
         mapReloadNonce={mapReloadNonce}
+        mapContainer={mapContainer}
+        onMapCanvasReady={onMapCanvasReady}
         onMapLoadStatus={onMapLoadStatus}
       />
 
@@ -669,6 +499,7 @@ const SceneContent: React.FC<{
 export const Studio3DCanvas: React.FC<Studio3DCanvasProps> = (props) => {
   const isSoftwareGl = useMemo(() => detectSoftwareWebGL(), []);
   const [contextLost, setContextLost] = useState(false);
+  const [mapContainer, setMapContainer] = useState<HTMLDivElement | null>(null);
 
   return (
     <WebGLErrorBoundary>
@@ -684,30 +515,44 @@ export const Studio3DCanvas: React.FC<Studio3DCanvasProps> = (props) => {
           </button>
         </div>
       ) : (
-        <Canvas
-          shadows={!isSoftwareGl}
-          dpr={isSoftwareGl ? 1 : [1, 2]}
-          camera={{ fov: 44, near: 1.5, far: 4500, position: [0, 120, 140] }}
-          gl={{
-            preserveDrawingBuffer: true,
-            antialias: !isSoftwareGl,
-            powerPreference: 'high-performance',
-            toneMapping: THREE.ACESFilmicToneMapping,
-            toneMappingExposure: 1.0,
-          }}
-          onCreated={({ gl }) => {
-            gl.domElement.addEventListener(
-              'webglcontextlost',
-              (e) => {
-                e.preventDefault();
-                setContextLost(true);
-              },
-              false,
-            );
-          }}
-        >
-          <SceneContent {...props} />
-        </Canvas>
+        <div className="relative w-full h-full">
+          {/* Layer Bawah: MapLibre GL OpenFreeMap */}
+          <div
+            ref={setMapContainer}
+            id="map"
+            className="absolute inset-0 w-full h-full"
+          />
+
+          {/* Layer Atas: Three.js Avatar & Route Ribbon Transparan */}
+          <div className="relative w-full h-full pointer-events-none">
+            <Canvas
+              shadows={!isSoftwareGl}
+              dpr={isSoftwareGl ? 1 : [1, 2]}
+              camera={{ fov: 44, near: 1.5, far: 4500, position: [0, 120, 140] }}
+              gl={{
+                alpha: true,
+                preserveDrawingBuffer: true,
+                antialias: !isSoftwareGl,
+                powerPreference: 'high-performance',
+                toneMapping: THREE.ACESFilmicToneMapping,
+                toneMappingExposure: 1.0,
+              }}
+              onCreated={({ gl }) => {
+                gl.setClearColor(0x000000, 0);
+                gl.domElement.addEventListener(
+                  'webglcontextlost',
+                  (e) => {
+                    e.preventDefault();
+                    setContextLost(true);
+                  },
+                  false,
+                );
+              }}
+            >
+              <SceneContent {...props} mapContainer={mapContainer} />
+            </Canvas>
+          </div>
+        </div>
       )}
     </WebGLErrorBoundary>
   );

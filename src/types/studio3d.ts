@@ -45,21 +45,9 @@ export type CameraMode3D =
   | 'overview'
   | 'finish-pose';
 export type Camera20mAngle = 'front' | 'back' | 'side' | 'orbit';
-export type CanonicalMapStyle3D =
-  | 'standard'
-  | 'liberty'
-  | 'satellite'
-  | 'terrain'
-  | 'monochrome'
-  | 'hybrid'
-  | 'city3d';
-export type MapStyle3D =
-  | CanonicalMapStyle3D
-  | 'openfreemap'
-  | 'voyager'
-  | 'topo'
-  | 'street'
-  | 'night';
+export type MapMode3D = 'light' | 'dark';
+export type MapStyle3D = MapMode3D;
+
 export type LightingMood3D =
   | 'auto'
   | 'morning'
@@ -80,12 +68,9 @@ export type RouteSnapMode3D = 'raw' | 'snap-road';
 export interface MapConfig {
   cameraMode: CameraMode3D;
   camera20mAngle: Camera20mAngle;
-  cameraZoom: number; // 0.5..2.5 multiplier (1.0 = calibrated default)
-  mapStyle: MapStyle3D;
+  cameraZoom: number;
+  mapStyle: MapMode3D;
   buildings3d: boolean;
-  overlayRelief?: boolean; // Three.js elevation contour + hillshade overlay texture
-  overlaySurface?: boolean; // Three.js PBR surface micro-detail bump/roughness overlay
-  overlayLabels?: boolean; // Three.js street/reference label overlay texture
   lightingMood: LightingMood3D;
   routeStyle?: RouteVisualStyle3D;
   routeSnapMode?: RouteSnapMode3D;
@@ -102,15 +87,15 @@ export interface ExportConfig {
   musicPreset: MusicPreset3D;
   customAudioUrl: string | null;
   customAudioName: string | null;
-  volume: number; // 0..1
+  volume: number;
   quality: VideoQuality3D;
 }
 
 export interface Studio3DTrackPoint {
   lat: number;
   lon: number;
-  xM: number; // East-West meters relative to center
-  zM: number; // North-South meters relative to center (North = negative Z in Three.js)
+  xM: number;
+  zM: number;
   elevationM: number;
   elapsedSec: number;
   distanceKm: number;
@@ -125,7 +110,7 @@ export interface Studio3DLandmark {
   id: string;
   label: string;
   type: LandmarkType3D;
-  progress: number; // 0..1 along route
+  progress: number;
   distanceKm: number;
   elevationM: number;
 }
@@ -155,30 +140,6 @@ export interface Studio3DTrack {
   landmarks: Studio3DLandmark[];
 }
 
-export interface OsmBuildingFootprint {
-  id: string;
-  polygon: Array<{ xM: number; zM: number }>;
-  heightM: number;
-  levels?: number;
-  distanceToRouteM?: number;
-}
-
-export interface OsmRoadWay {
-  id: string;
-  highway: string;
-  widthM: number;
-  layer?: number;
-  points: Array<{ xM: number; zM: number }>;
-}
-
-export function normalizeMapStyle3D(style: MapStyle3D): CanonicalMapStyle3D {
-  if (style === 'openfreemap') return 'liberty';
-  if (style === 'voyager' || style === 'street') return 'standard';
-  if (style === 'topo') return 'terrain';
-  if (style === 'night') return 'city3d';
-  return style;
-}
-
 export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
   characterStyle: 'chibi',
   characterSize: 'medium',
@@ -203,11 +164,8 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
   cameraMode: 'auto',
   camera20mAngle: 'back',
   cameraZoom: 1.0,
-  mapStyle: 'standard',
+  mapStyle: 'light',
   buildings3d: true,
-  overlayRelief: true,
-  overlaySurface: true,
-  overlayLabels: true,
   lightingMood: 'auto',
   routeStyle: 'google-maps',
   routeSnapMode: 'raw',

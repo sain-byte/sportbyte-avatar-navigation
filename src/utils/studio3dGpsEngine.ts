@@ -42,10 +42,6 @@ export function isValidGeoCoord(lat: number, lon: number): boolean {
   );
 }
 
-/**
- * Validates lat/lon coordinates, removes duplicate points (<0.35m), rejects GPS
- * outlier teleport spikes, and preserves strict monotonic time ordering.
- */
 export function cleanRawGeoSamples<T extends CleanGeoSample>(samples: T[]): T[] {
   const valid = samples
     .filter((s) => isValidGeoCoord(s.lat, s.lon) && Number.isFinite(s.timeMs))
@@ -63,12 +59,10 @@ export function cleanRawGeoSamples<T extends CleanGeoSample>(samples: T[]): T[] 
     const dtSec = Math.max(0.1, (curr.timeMs - prev.timeMs) / 1000);
     const speedMps = segM / dtSec;
 
-    // Duplicate sample (< 0.35 m movement), except always keep final sample if needed
-    if (segM < 0.35 && i < valid.length - 1) {
+    if (segM < 0.8 && i < valid.length - 1) {
       continue;
     }
 
-    // Reject isolated GPS teleport/multipath outlier spikes (>14 m/s or bounce-back spike)
     if (speedMps > 14.0 && segM > 35 && i < valid.length - 1) {
       const next = valid[i + 1];
       const skipDistKm = haversineDistanceKm(prev.lat, prev.lon, next.lat, next.lon);
@@ -83,17 +77,11 @@ export function cleanRawGeoSamples<T extends CleanGeoSample>(samples: T[]): T[] 
   return cleaned.length >= 2 ? cleaned : valid;
 }
 
-/**
- * Computes adaptive target point budget based on route distance and geometric complexity.
- */
 export function computeAdaptivePointBudget(totalDistanceKm: number): number {
-  if (totalDistanceKm < 5) {
-    return 420; // Short routes target 300-500 points
-  }
+  if (totalDistanceKm < 5) return 420;
   if (totalDistanceKm <= 20) {
-    return Math.round(520 + ((totalDistanceKm - 5) / 15) * 440); // Medium routes: 520-960 points
+    return Math.round(520 + ((totalDistanceKm - 5) / 15) * 440);
   }
-  // Long routes scale smoothly up to 1500 points without sacrificing bends
   return Math.min(1500, Math.round(960 + (totalDistanceKm - 20) * 14));
 }
 
@@ -132,10 +120,6 @@ function headingAngleChangeRad(
   return Math.acos(dot);
 }
 
-/**
- * Direction-aware Douglas-Peucker + sharp-turn/elevation anchor simplifier.
- * Preserves sharp corners, start/finish, and significant elevation peaks cleanly.
- */
 export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
   samples: T[],
   totalDistanceKm: number,
@@ -165,7 +149,6 @@ export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
     zs[i] = -(samples[i].lat - cLat) * mLat;
   }
 
-  // Anchor points: start, end, highest & lowest elevation, sharp direction turns (>= 22 deg)
   const anchors = new Uint8Array(samples.length);
   anchors[0] = 1;
   anchors[samples.length - 1] = 1;
@@ -186,14 +169,12 @@ export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
       zs[i + 1],
     );
     if (turnAngle >= 0.38) {
-      // ~22 degrees
       anchors[i] = 1;
     }
   }
   anchors[minEleIdx] = 1;
   anchors[maxEleIdx] = 1;
 
-  // Iterative Douglas-Peucker scoring every vertex by its max orthogonal error
   const scores = new Float64Array(samples.length);
   const stack: Array<[number, number]> = [[0, samples.length - 1]];
   while (stack.length > 0) {
@@ -214,7 +195,6 @@ export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
     }
   }
 
-  // Select top indices: all anchors + highest DP error points + sparse straight-line cadence coverage
   const ranked: number[] = [];
   for (let i = 1; i < samples.length - 1; i += 1) {
     ranked.push(i);
@@ -226,7 +206,6 @@ export function simplifyGeoSamplesAdaptive<T extends CleanGeoSample>(
   });
 
   const keep = new Set<number>([0, samples.length - 1]);
-  // Reserve 80% for highest geometric value (DP + turns + peaks), 20% uniform coverage along long straights
   const geomSlots = Math.floor((targetBudget - 2) * 0.8);
   for (let k = 0; k < ranked.length && keep.size < geomSlots + 2; k += 1) {
     keep.add(ranked[k]);
@@ -254,10 +233,6 @@ export function latLonToMetricLocal(
   };
 }
 
-/**
- * Binary-searches track points by cumulative distance (km) and returns an interpolated point.
- * Ensures timeline progress maps linearly to physical distance covered rather than point count.
- */
 export function sampleTrackPointByDistance(
   points: Studio3DTrackPoint[],
   totalDistanceKm: number,
@@ -309,9 +284,34 @@ export function sampleTrackPointByDistance(
 }
 
 /**
- * Builds an overshoot-free, terrain-grounded 3D polyline with tight quadratic corner fillets
- * clamped within maxCornerFilletM (default 2.0m) so sharp street corners never bulge off the road.
+ * Menghilangkan micro zig-zag GPS drift dengan Gaussian-weighted Moving Average
+ * sebelum membangun kurva rute dan arah hadap avatar.
  */
+function smoothTrackCoordinates(points: Studio3DTrackPoint[]): Array<{ x: number; z: number }> {
+  const n = points.length;
+  if (n <= 2) return points.map((p) => ({ x: p.xM, z: p.zM }));
+
+  const out: Array<{ x: number; z: number }> = new Array(n);
+  out[0] = { x: points[0].xM, z: points[0].zM };
+  out[n - 1] = { x: points[n - 1].xM, z: points[n - 1].zM };
+
+  const weights = [0.1, 0.24, 0.32, 0.24, 0.1];
+  for (let i = 1; i < n - 1; i += 1) {
+    let sx = 0;
+    let sz = 0;
+    let sw = 0;
+    for (let k = -2; k <= 2; k += 1) {
+      const idx = Math.min(n - 1, Math.max(0, i + k));
+      const w = weights[k + 2];
+      sx += points[idx].xM * w;
+      sz += points[idx].zM * w;
+      sw += w;
+    }
+    out[i] = { x: sx / sw, z: sz / sw };
+  }
+  return out;
+}
+
 export function buildGroundedRoutePath(
   points: Studio3DTrackPoint[],
   sampleGroundY: (xM: number, zM: number) => number,
@@ -321,9 +321,9 @@ export function buildGroundedRoutePath(
     maxCornerFilletM?: number;
   },
 ): GroundedRoutePath {
-  const heightOffsetM = options?.heightOffsetM ?? 0.22;
-  const maxSegmentLenM = options?.maxSegmentLenM ?? 7.5;
-  const maxCornerFilletM = options?.maxCornerFilletM ?? 1.8;
+  const heightOffsetM = options?.heightOffsetM ?? 0.08;
+  const maxSegmentLenM = options?.maxSegmentLenM ?? 5.0;
+  const maxCornerFilletM = options?.maxCornerFilletM ?? 2.4;
 
   if (points.length === 0) {
     return { vertices: [], totalArcMeters: 0 };
@@ -336,48 +336,48 @@ export function buildGroundedRoutePath(
     };
   }
 
-  // First pass: clamp sharp corners with tiny tangent-bounded quadratic fillets (prevents spline overshoot)
+  const smoothed = smoothTrackCoordinates(points);
+
   const xzRaw: Array<{ x: number; z: number }> = [];
-  xzRaw.push({ x: points[0].xM, z: points[0].zM });
+  xzRaw.push({ x: smoothed[0].x, z: smoothed[0].z });
 
-  for (let i = 1; i < points.length - 1; i += 1) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const next = points[i + 1];
+  for (let i = 1; i < smoothed.length - 1; i += 1) {
+    const prev = smoothed[i - 1];
+    const curr = smoothed[i];
+    const next = smoothed[i + 1];
 
-    const dx1 = curr.xM - prev.xM;
-    const dz1 = curr.zM - prev.zM;
+    const dx1 = curr.x - prev.x;
+    const dz1 = curr.z - prev.z;
     const l1 = Math.hypot(dx1, dz1);
 
-    const dx2 = next.xM - curr.xM;
-    const dz2 = next.zM - curr.zM;
+    const dx2 = next.x - curr.x;
+    const dz2 = next.z - curr.z;
     const l2 = Math.hypot(dx2, dz2);
 
     if (l1 < 0.4 || l2 < 0.4) {
-      xzRaw.push({ x: curr.xM, z: curr.zM });
+      xzRaw.push({ x: curr.x, z: curr.z });
       continue;
     }
 
     const dot = Math.max(-1, Math.min(1, (dx1 * dx2 + dz1 * dz2) / (l1 * l2)));
     const turnAngle = Math.acos(dot);
 
-    if (turnAngle < 0.26) {
-      xzRaw.push({ x: curr.xM, z: curr.zM });
+    if (turnAngle < 0.22) {
+      xzRaw.push({ x: curr.x, z: curr.z });
     } else {
-      const trim = Math.min(maxCornerFilletM, l1 * 0.24, l2 * 0.24);
-      const ax = curr.xM - (dx1 / l1) * trim;
-      const az = curr.zM - (dz1 / l1) * trim;
-      const bx = curr.xM + (dx2 / l2) * trim;
-      const bz = curr.zM + (dz2 / l2) * trim;
-      const midX = 0.25 * ax + 0.5 * curr.xM + 0.25 * bx;
-      const midZ = 0.25 * az + 0.5 * curr.zM + 0.25 * bz;
+      const trim = Math.min(maxCornerFilletM, l1 * 0.28, l2 * 0.28);
+      const ax = curr.x - (dx1 / l1) * trim;
+      const az = curr.z - (dz1 / l1) * trim;
+      const bx = curr.x + (dx2 / l2) * trim;
+      const bz = curr.z + (dz2 / l2) * trim;
+      const midX = 0.25 * ax + 0.5 * curr.x + 0.25 * bx;
+      const midZ = 0.25 * az + 0.5 * curr.z + 0.25 * bz;
       xzRaw.push({ x: ax, z: az }, { x: midX, z: midZ }, { x: bx, z: bz });
     }
   }
-  const last = points[points.length - 1];
-  xzRaw.push({ x: last.xM, z: last.zM });
+  const last = smoothed[smoothed.length - 1];
+  xzRaw.push({ x: last.x, z: last.z });
 
-  // Second pass: adaptive terrain subdivision along every straight span
   const vertices: GroundedRouteVertex[] = [];
   let cumDistM = 0;
 
@@ -410,13 +410,16 @@ export function buildGroundedRoutePath(
     }
   }
 
-  // Third pass: smoothed forward yaw around a local metric window (+-6m) for fluid avatar turning
+  // Hitung yaw dengan look-ahead ~6 meter ke depan & 4 meter ke belakang agar bebas jitter rotasi
   for (let i = 0; i < vertices.length; i += 1) {
-    const i0 = Math.max(0, i - 2);
-    const i1 = Math.min(vertices.length - 1, i + 2);
+    let i0 = i;
+    while (i0 > 0 && vertices[i].distM - vertices[i0].distM < 4.0) i0 -= 1;
+    let i1 = i;
+    while (i1 < vertices.length - 1 && vertices[i1].distM - vertices[i].distM < 6.0) i1 += 1;
+
     const dx = vertices[i1].x - vertices[i0].x;
     const dz = vertices[i1].z - vertices[i0].z;
-    if (Math.hypot(dx, dz) > 0.05) {
+    if (Math.hypot(dx, dz) > 0.1) {
       vertices[i].yawRad = Math.atan2(dx, dz);
     } else if (i > 0) {
       vertices[i].yawRad = vertices[i - 1].yawRad;
@@ -429,10 +432,6 @@ export function buildGroundedRoutePath(
   };
 }
 
-/**
- * Samples smoothed 3D position and heading yaw along the grounded route by normalized
- * cumulative distance progress (0..1), with zero allocations when outPos is provided.
- */
 export function sampleGroundedRouteAtProgress(
   path: GroundedRoutePath,
   routeProgress: number,
@@ -477,7 +476,6 @@ export function sampleGroundedRouteAtProgress(
     v0.z + (v1.z - v0.z) * t,
   );
 
-  // Shortest-arc yaw interpolation
   let diff = v1.yawRad - v0.yawRad;
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
@@ -486,10 +484,6 @@ export function sampleGroundedRouteAtProgress(
   return { position: pos, yawRad };
 }
 
-/**
- * Builds an index-capped tapered ribbon or slim tube BufferGeometry directly along grounded vertices,
- * preserving exact GPS shape with zero spline overshoot and clean single draw-call progress slicing.
- */
 export function buildSlimRouteRibbonGeometry(
   path: GroundedRoutePath,
   halfWidthM: number,
@@ -518,7 +512,6 @@ export function buildSlimRouteRibbonGeometry(
     const len = Math.hypot(tx, tz) || 1;
     tx /= len;
     tz /= len;
-    // Perpendicular right vector on XZ plane
     const nx = -tz;
     const nz = tx;
 
@@ -573,9 +566,7 @@ const PACE_SLOW_COLOR = new THREE.Color('#EF4444');
 export function paceSecToColor(paceSecPerKm: number, outColor?: THREE.Color): THREE.Color {
   const c = outColor ?? new THREE.Color();
   const clamped = Math.min(480, Math.max(210, Number.isFinite(paceSecPerKm) ? paceSecPerKm : 340));
-  if (clamped <= 270) {
-    return c.copy(PACE_FAST_COLOR);
-  }
+  if (clamped <= 270) return c.copy(PACE_FAST_COLOR);
   if (clamped <= 345) {
     return c.lerpColors(PACE_FAST_COLOR, PACE_MOD_COLOR, (clamped - 270) / 75);
   }
@@ -585,10 +576,6 @@ export function paceSecToColor(paceSecPerKm: number, outColor?: THREE.Color): TH
   return c.copy(PACE_SLOW_COLOR);
 }
 
-/**
- * Builds a Google Maps traffic/pace-gradient route ribbon BufferGeometry with per-vertex
- * RGB colors smoothly interpolated from trackPoints pace (fast emerald -> amber -> slow coral).
- */
 export function buildPaceColoredRouteRibbonGeometry(
   path: GroundedRoutePath,
   trackPoints: Studio3DTrackPoint[],
